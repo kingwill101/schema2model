@@ -42,6 +42,13 @@ class _ResolvedSchema {
   final _SchemaLocation location;
 }
 
+class _DynamicScopeEntry {
+  const _DynamicScopeEntry({required this.name, required this.location});
+
+  final String name;
+  final _SchemaLocation location;
+}
+
 class _SchemaWalker {
   _SchemaWalker(
     this._rootSchema,
@@ -61,9 +68,16 @@ class _SchemaWalker {
        _rootUri = baseUri,
        _documentLoader = documentLoader,
        _documentCache = {baseUri: _rootSchema},
-       _documentDialects = <Uri, SchemaDialect>{} {
+       _documentDialects = <Uri, SchemaDialect>{},
+       _anchorsByDocument = <Uri, Map<String, _SchemaLocation>>{},
+       _dynamicAnchorsByDocument = <Uri, Map<String, _SchemaLocation>>{},
+       _idOrigins = <String, _SchemaLocation>{},
+       _dynamicScope = <_DynamicScopeEntry>[],
+       _indexedDocuments = <Uri>{},
+       _indexedLocations = <_SchemaCacheKey>{} {
     final rootDialect = _detectDocumentDialect(baseUri, _rootSchema);
     _documentDialects[baseUri] = rootDialect;
+    _indexDocument(baseUri, _rootSchema);
   }
 
   final Map<String, dynamic> _rootSchema;
@@ -82,10 +96,17 @@ class _SchemaWalker {
   final SchemaDocumentLoader _documentLoader;
   final Map<Uri, Map<String, dynamic>> _documentCache;
   final Map<Uri, SchemaDialect> _documentDialects;
+  final Map<Uri, Map<String, _SchemaLocation>> _anchorsByDocument;
+  final Map<Uri, Map<String, _SchemaLocation>> _dynamicAnchorsByDocument;
+  final Map<String, _SchemaLocation> _idOrigins;
+  final List<_DynamicScopeEntry> _dynamicScope;
+  final Set<Uri> _indexedDocuments;
+  final Set<_SchemaCacheKey> _indexedLocations;
 
   SchemaIr build() {
     final rootLocation = _SchemaLocation(uri: _rootUri, pointer: '#');
     final rootDialect = _documentDialect(_rootUri);
+    _log('Building IR starting at $_rootUri (dialect: ${rootDialect.uri})');
     final root = _ensureRootClass(rootLocation, rootDialect);
     _processDefinitions(_rootSchema, rootLocation, rootDialect);
     final classes = _orderedClasses(root);
@@ -100,6 +121,82 @@ class _SchemaWalker {
       unions: List<IrUnion>.unmodifiable(_unions),
       helpers: List<IrHelper>.unmodifiable(_helpers.values),
     );
+  }
+
+  void _log(String message) {
+    if (_options.onWarning != null) {
+      _options.onWarning!('[identifiers] $message');
+    }
+    // Fallback to print for interactive debugging
+    // ignore: avoid_print
+    print('[SchemaWalker] $message');
+  }
+
+  void _indexDocument(Uri uri, Map<String, dynamic> schema) {
+    if (!_indexedDocuments.add(uri)) {
+      return;
+    }
+
+    void visit(Map<String, dynamic>? node, Uri currentUri, String pointer) {
+      if (node == null) {
+        return;
+      }
+
+      final key = _SchemaCacheKey(currentUri, pointer);
+      if (!_indexedLocations.add(key)) {
+        return;
+      }
+
+      final location = _SchemaLocation(uri: currentUri, pointer: pointer);
+
+      final anchorValue = node[r'$anchor'];
+      if (anchorValue is String && anchorValue.isNotEmpty) {
+        _registerAnchor(currentUri, anchorValue, location);
+      } else if (anchorValue != null && anchorValue is! String) {
+        _schemaError('Expected "\$anchor" to be a string', location);
+      }
+
+      final dynamicAnchorValue = node[r'$dynamicAnchor'];
+      if (dynamicAnchorValue is String && dynamicAnchorValue.isNotEmpty) {
+        _registerDynamicAnchor(currentUri, dynamicAnchorValue, location);
+      } else if (dynamicAnchorValue != null && dynamicAnchorValue is! String) {
+        _schemaError('Expected "\$dynamicAnchor" to be a string', location);
+      }
+
+      Uri effectiveUri = currentUri;
+      var effectivePointer = pointer;
+      final idValue = node[r'$id'];
+      if (idValue is String && idValue.isNotEmpty) {
+        final canonical = _resolveIdentifierUri(idValue, currentUri, location);
+        _registerId(canonical, location);
+        effectiveUri = canonical;
+        effectivePointer = '#';
+        final canonicalKey = _SchemaCacheKey(effectiveUri, effectivePointer);
+        _indexedLocations.add(canonicalKey);
+      } else if (idValue != null && idValue is! String) {
+        _schemaError('Expected "\$id" to be a string', location);
+      }
+
+      for (final entry in node.entries) {
+        final key = entry.key;
+        final value = entry.value;
+        if (value is Map<String, dynamic>) {
+          final childPointer = _pointerChild(effectivePointer, key);
+          visit(value, effectiveUri, childPointer);
+        } else if (value is List) {
+          for (var i = 0; i < value.length; i++) {
+            final element = value[i];
+            if (element is Map<String, dynamic>) {
+              final parentPointer = _pointerChild(effectivePointer, key);
+              final childPointer = _pointerChild(parentPointer, '$i');
+              visit(element, effectiveUri, childPointer);
+            }
+          }
+        }
+      }
+    }
+
+    visit(schema, uri, '#');
   }
 
   IrClass _ensureRootClass(_SchemaLocation location, SchemaDialect dialect) {
@@ -149,6 +246,11 @@ class _SchemaWalker {
     return list;
   }
 
+  String _describeLocation(_SchemaLocation location) {
+    final pointer = location.pointer == '#' ? '' : location.pointer;
+    return '${location.uri}$pointer';
+  }
+
   TypeRef _resolveSchema(
     Map<String, dynamic>? schema,
     _SchemaLocation location, {
@@ -181,6 +283,41 @@ class _SchemaWalker {
       return ref;
     }
 
+    final anchorValue = schema[r'$anchor'];
+    if (anchorValue is String) {
+      if (anchorValue.isEmpty) {
+        _schemaError('"\$anchor" must be a non-empty string', location);
+      }
+      _registerAnchor(location.uri, anchorValue, location);
+    } else if (anchorValue != null) {
+      _schemaError('Expected "\$anchor" to be a string', location);
+    }
+
+    final dynamicAnchorValue = schema[r'$dynamicAnchor'];
+    var pushedDynamicAnchor = false;
+    if (dynamicAnchorValue is String) {
+      if (dynamicAnchorValue.isEmpty) {
+        _schemaError(
+          '"\$dynamicAnchor" must be a non-empty string',
+          location,
+        );
+      }
+      _registerDynamicAnchor(location.uri, dynamicAnchorValue, location);
+      _dynamicScope.add(
+        _DynamicScopeEntry(name: dynamicAnchorValue, location: location),
+      );
+      pushedDynamicAnchor = true;
+    } else if (dynamicAnchorValue != null) {
+      _schemaError('Expected "\$dynamicAnchor" to be a string', location);
+    }
+
+    final idValue = schema[r'$id'];
+    if (idValue is String && idValue.isNotEmpty) {
+      final canonical = _resolveIdentifierUri(idValue, location.uri, location);
+      _registerId(canonical, location);
+      _documentCache.putIfAbsent(canonical, () => schema);
+    }
+
     final inheritedDialect = dialect ?? _documentDialect(location.uri);
 
     if (_inProgress.contains(cacheKey)) {
@@ -202,6 +339,20 @@ class _SchemaWalker {
 
       if (workingSchema case {'\$ref': final String refValue}) {
         final resolved = _resolveReference(refValue, location);
+        final inferredName = _nameFromPointer(resolved.location.pointer);
+        final refDialect = _documentDialect(resolved.location.uri);
+        final typeRef = _resolveSchema(
+          resolved.schema,
+          resolved.location,
+          suggestedClassName: suggestedClassName ?? inferredName,
+          dialect: refDialect,
+        );
+        _typeCache[cacheKey] = typeRef;
+        return typeRef;
+      }
+
+      if (workingSchema case {'\$dynamicRef': final String dynamicRef}) {
+        final resolved = _resolveDynamicReference(dynamicRef, location);
         final inferredName = _nameFromPointer(resolved.location.pointer);
         final refDialect = _documentDialect(resolved.location.uri);
         final typeRef = _resolveSchema(
@@ -411,6 +562,9 @@ class _SchemaWalker {
       return primitive;
     } finally {
       _inProgress.remove(cacheKey);
+      if (pushedDynamicAnchor) {
+        _dynamicScope.removeLast();
+      }
     }
   }
 
@@ -655,6 +809,211 @@ class _SchemaWalker {
     }
     _validateVocabulary(schema, active, location);
     return active;
+  }
+
+  Uri _resolveIdentifierUri(
+    String value,
+    Uri baseUri,
+    _SchemaLocation location,
+  ) {
+    Uri parsed;
+    try {
+      parsed = Uri.parse(value);
+    } on FormatException {
+      _schemaError('Invalid "\$id" "$value"', location);
+    }
+    final resolved = baseUri.resolveUri(parsed);
+    _log(
+      'Resolving id $value from ${_describeLocation(location)} with base $baseUri -> $resolved (abs=${resolved.hasScheme && resolved.scheme.isNotEmpty}, fragment=${resolved.hasFragment})',
+    );
+    if (!resolved.hasScheme || resolved.scheme.isEmpty) {
+      _schemaError('"\$id" must resolve to an absolute IRI', location);
+    }
+    if (resolved.hasFragment) {
+      _schemaError(
+        '"\$id" must not include a fragment. Use "\$anchor" instead.',
+        location,
+      );
+    }
+    return resolved;
+  }
+
+  void _registerAnchor(Uri documentUri, String anchor, _SchemaLocation where) {
+    final map = _anchorsByDocument.putIfAbsent(
+      documentUri,
+      () => <String, _SchemaLocation>{},
+    );
+    final existing = map[anchor];
+    if (existing != null) {
+      if (existing.uri == where.uri && existing.pointer == where.pointer) {
+        return;
+      }
+      _schemaError(
+        'Duplicate "\$anchor" "$anchor" already defined at ${_describeLocation(existing)}.',
+        where,
+      );
+    }
+    map[anchor] = where;
+    _log('Registered anchor $anchor at ${_describeLocation(where)}');
+  }
+
+  void _registerDynamicAnchor(
+    Uri documentUri,
+    String anchor,
+    _SchemaLocation where,
+  ) {
+    final map = _dynamicAnchorsByDocument.putIfAbsent(
+      documentUri,
+      () => <String, _SchemaLocation>{},
+    );
+    final existing = map[anchor];
+    if (existing != null) {
+      if (existing.uri == where.uri && existing.pointer == where.pointer) {
+        return;
+      }
+      _schemaError(
+        'Duplicate "\$dynamicAnchor" "$anchor" already defined at ${_describeLocation(existing)}.',
+        where,
+      );
+    }
+    map[anchor] = where;
+    _log('Registered dynamic anchor $anchor at ${_describeLocation(where)}');
+  }
+
+  void _registerId(Uri uri, _SchemaLocation origin) {
+    final key = uri.toString();
+    final existing = _idOrigins[key];
+    if (existing != null) {
+      if (existing.uri == origin.uri && existing.pointer == origin.pointer) {
+        return;
+      }
+      _schemaError(
+        'Duplicate "\$id" "$key" already defined at ${_describeLocation(existing)}.',
+        origin,
+      );
+    }
+    _idOrigins[key] = origin;
+    _log('Registered id $key at ${_describeLocation(origin)}');
+  }
+
+  _SchemaLocation? _lookupAnchor(Uri documentUri, String anchor) {
+    final map = _anchorsByDocument[documentUri];
+    if (map != null && map.containsKey(anchor)) {
+      return map[anchor];
+    }
+    final document = _loadDocument(documentUri);
+    final refreshed = _anchorsByDocument[documentUri];
+    if (refreshed != null) {
+      return refreshed[anchor];
+    }
+    final location = _findAnchor(document, documentUri, anchor);
+    if (location != null) {
+      return location;
+    }
+    return null;
+  }
+
+  _SchemaLocation? _lookupDynamicAnchor(Uri documentUri, String anchor) {
+    final map = _dynamicAnchorsByDocument[documentUri];
+    if (map != null && map.containsKey(anchor)) {
+      return map[anchor];
+    }
+    final document = _loadDocument(documentUri);
+    final refreshed = _dynamicAnchorsByDocument[documentUri];
+    if (refreshed != null && refreshed.containsKey(anchor)) {
+      return refreshed[anchor];
+    }
+    final location = _findDynamicAnchor(document, documentUri, anchor);
+    if (location != null) {
+      return location;
+    }
+    return null;
+  }
+
+  _SchemaLocation? _findAnchor(
+    Map<String, dynamic>? schema,
+    Uri baseUri,
+    String anchor,
+  ) {
+    if (schema == null) return null;
+    if (schema case {'\$id': final String idValue}) {
+      final canonical = _resolveIdentifierUri(idValue, baseUri, _SchemaLocation(uri: baseUri, pointer: '#'));
+      if (canonical != baseUri) {
+        return _lookupAnchor(canonical, anchor);
+      }
+    }
+
+    if (schema case {'\$anchor': final String value} when value == anchor) {
+      final location = _SchemaLocation(uri: baseUri, pointer: '#');
+      _registerAnchor(baseUri, anchor, location);
+      return location;
+    }
+
+    for (final entry in schema.entries) {
+      final value = entry.value;
+      if (value is Map<String, dynamic>) {
+        final childPointer = _pointerChild('#', entry.key);
+        final result = _findAnchor(value, baseUri, anchor);
+        if (result != null) {
+          return _SchemaLocation(uri: result.uri, pointer: childPointer);
+        }
+      } else if (value is List) {
+        for (var i = 0; i < value.length; i++) {
+          final element = value[i];
+          if (element is Map<String, dynamic>) {
+            final childPointer = _pointerChild(_pointerChild('#', entry.key), '$i');
+            final result = _findAnchor(element, baseUri, anchor);
+            if (result != null) {
+              return _SchemaLocation(uri: result.uri, pointer: childPointer);
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  _SchemaLocation? _findDynamicAnchor(
+    Map<String, dynamic>? schema,
+    Uri baseUri,
+    String anchor,
+  ) {
+    if (schema == null) return null;
+    if (schema case {'\$id': final String idValue}) {
+      final canonical = _resolveIdentifierUri(idValue, baseUri, _SchemaLocation(uri: baseUri, pointer: '#'));
+      if (canonical != baseUri) {
+        return _lookupDynamicAnchor(canonical, anchor);
+      }
+    }
+
+    if (schema case {'\$dynamicAnchor': final String value} when value == anchor) {
+      final location = _SchemaLocation(uri: baseUri, pointer: '#');
+      _registerDynamicAnchor(baseUri, anchor, location);
+      return location;
+    }
+
+    for (final entry in schema.entries) {
+      final value = entry.value;
+      if (value is Map<String, dynamic>) {
+        final childPointer = _pointerChild('#', entry.key);
+        final result = _findDynamicAnchor(value, baseUri, anchor);
+        if (result != null) {
+          return _SchemaLocation(uri: result.uri, pointer: childPointer);
+        }
+      } else if (value is List) {
+        for (var i = 0; i < value.length; i++) {
+          final element = value[i];
+          if (element is Map<String, dynamic>) {
+            final childPointer = _pointerChild(_pointerChild('#', entry.key), '$i');
+            final result = _findDynamicAnchor(element, baseUri, anchor);
+            if (result != null) {
+              return _SchemaLocation(uri: result.uri, pointer: childPointer);
+            }
+          }
+        }
+      }
+    }
+    return null;
   }
 
   void _validateVocabulary(
@@ -1374,10 +1733,30 @@ class _SchemaWalker {
       );
     }
 
-    final parsed = Uri.parse(ref);
+    Uri parsed;
+    try {
+      parsed = Uri.parse(ref);
+    } on FormatException {
+      _log('Invalid ref $ref at ${_describeLocation(context)}');
+      return _ResolvedSchema(schema: null, location: context);
+    }
     final resolved = context.uri.resolveUri(parsed);
-    final targetUri = resolved.replace(fragment: '');
     final fragment = resolved.fragment;
+    final targetUri = fragment.isEmpty
+        ? resolved
+        : Uri.parse(resolved.toString().split('#').first);
+
+    if (fragment.isNotEmpty && !fragment.startsWith('/')) {
+      final anchorLocation = _lookupAnchor(targetUri, fragment);
+      if (anchorLocation != null) {
+        final document = _loadDocument(anchorLocation.uri);
+        final schema = _schemaAtPointer(document, anchorLocation.pointer);
+        return _ResolvedSchema(schema: schema, location: anchorLocation);
+      }
+      _log('Anchor $fragment not found in $targetUri');
+      return _ResolvedSchema(schema: null, location: context);
+    }
+
     final pointer = fragment.isEmpty ? '#' : _normalizePointer('#$fragment');
     final document = _loadDocument(targetUri);
     final schema = _schemaAtPointer(document, pointer);
@@ -1385,6 +1764,78 @@ class _SchemaWalker {
       schema: schema,
       location: _SchemaLocation(uri: targetUri, pointer: pointer),
     );
+  }
+
+  _ResolvedSchema _resolveDynamicReference(
+    String ref,
+    _SchemaLocation context,
+  ) {
+    Uri parsed;
+    try {
+      parsed = Uri.parse(ref);
+    } on FormatException {
+      _log('Invalid dynamicRef $ref at ${_describeLocation(context)}');
+      return _ResolvedSchema(schema: null, location: context);
+    }
+    final resolved = context.uri.resolveUri(parsed);
+    final fragment = resolved.fragment;
+    final targetUri = fragment.isEmpty
+        ? resolved
+        : Uri.parse(resolved.toString().split('#').first);
+
+    if (fragment.isEmpty) {
+      final document = _loadDocument(targetUri);
+      final schema = _schemaAtPointer(document, '#');
+      return _ResolvedSchema(
+        schema: schema,
+        location: _SchemaLocation(uri: targetUri, pointer: '#'),
+      );
+    }
+
+    if (fragment.startsWith('/')) {
+      final pointer = _normalizePointer('#$fragment');
+      final document = _loadDocument(targetUri);
+      final schema = _schemaAtPointer(document, pointer);
+      return _ResolvedSchema(
+        schema: schema,
+        location: _SchemaLocation(uri: targetUri, pointer: pointer),
+      );
+    }
+
+    for (final entry in _dynamicScope.reversed) {
+      if (entry.name == fragment) {
+        final document = _loadDocument(entry.location.uri);
+        final schema = _schemaAtPointer(document, entry.location.pointer);
+        return _ResolvedSchema(
+          schema: schema,
+          location: entry.location,
+        );
+      }
+    }
+
+    final dynamicAnchorLocation = _lookupDynamicAnchor(targetUri, fragment);
+    if (dynamicAnchorLocation != null) {
+      final document = _loadDocument(dynamicAnchorLocation.uri);
+      final schema =
+          _schemaAtPointer(document, dynamicAnchorLocation.pointer);
+      return _ResolvedSchema(
+        schema: schema,
+        location: dynamicAnchorLocation,
+      );
+    }
+
+    final anchorLocation = _lookupAnchor(targetUri, fragment);
+    if (anchorLocation != null) {
+      final document = _loadDocument(anchorLocation.uri);
+      final schema = _schemaAtPointer(document, anchorLocation.pointer);
+      return _ResolvedSchema(
+        schema: schema,
+        location: anchorLocation,
+      );
+    }
+
+    _log('Unable to resolve dynamicRef $ref at ${_describeLocation(context)}');
+    return _ResolvedSchema(schema: null, location: context);
   }
 
   Map<String, dynamic>? _schemaAtPointer(
@@ -1437,6 +1888,7 @@ class _SchemaWalker {
       final dialect = _detectDocumentDialect(uri, document);
       _documentDialects[uri] = dialect;
     }
+    _indexDocument(uri, document);
     return document;
   }
 
