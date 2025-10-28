@@ -1,0 +1,19 @@
+{
+  "title": "Wrapper",
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "alias": {
+          "$ref": "1/name"
+        }
+      },
+      "required": ["name"]
+    }
+  },
+  "required": ["value"]
+}

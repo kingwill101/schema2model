@@ -1,0 +1,23 @@
+{
+  "definitions": {
+    "Address": {
+      "title": "Address",
+      "type": "object",
+      "properties": {
+        "line1": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "postalCode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line1",
+        "city"
+      ]
+    }
+  }
+}

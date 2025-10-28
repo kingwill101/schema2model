@@ -1,0 +1,16 @@
+targets:
+  $default:
+    builders:
+      schemamodeschema|schema_builder:
+        generate_for:
+          - lib/**.schema.json
+          - example/**.schema.json
+
+builders:
+  schema_builder:
+    import: "package:schemamodeschema/builder.dart"
+    builder_factories: ["schemaToDartBuilder"]
+    build_extensions:
+      ".schema.json": [".schema.dart"]
+    build_to: source
+    auto_apply: root_package

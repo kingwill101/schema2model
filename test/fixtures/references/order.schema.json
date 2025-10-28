@@ -1,0 +1,18 @@
+{
+  "$id": "order.schema.json",
+  "title": "Order",
+  "type": "object",
+  "properties": {
+    "shippingAddress": {
+      "$ref": "./shared/address.schema.json#/definitions/Address"
+    },
+    "billingAddress": {
+      "$ref": "./shared/address.schema.json#/definitions/Address"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "complete"]
+    }
+  },
+  "required": ["shippingAddress"]
+}

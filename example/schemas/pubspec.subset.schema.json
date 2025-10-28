@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pubspec",
+  "description": "A tiny subset of the pubspec.yaml structure to demonstrate generation.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "description": "Package name." },
+    "version": { "type": "string" },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "sdk": { "type": "string" },
+        "flutter": { "type": "string" }
+      }
+    },
+    "publish_to": {
+      "type": "string",
+      "enum": ["none", "pub.dev"],
+      "description": "Publish destination or 'none'."
+    }
+  },
+  "required": ["name"]
+}
