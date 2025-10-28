@@ -297,10 +297,7 @@ class _SchemaWalker {
     var pushedDynamicAnchor = false;
     if (dynamicAnchorValue is String) {
       if (dynamicAnchorValue.isEmpty) {
-        _schemaError(
-          '"\$dynamicAnchor" must be a non-empty string',
-          location,
-        );
+        _schemaError('"\$dynamicAnchor" must be a non-empty string', location);
       }
       _registerDynamicAnchor(location.uri, dynamicAnchorValue, location);
       _dynamicScope.add(
@@ -652,7 +649,10 @@ class _SchemaWalker {
 
         int? minContains;
         final minContainsRaw = workingSchema['minContains'];
-        final minContainsPointer = _pointerChild(location.pointer, 'minContains');
+        final minContainsPointer = _pointerChild(
+          location.pointer,
+          'minContains',
+        );
         if (minContainsRaw is int) {
           minContains = minContainsRaw;
         } else if (minContainsRaw != null) {
@@ -661,10 +661,16 @@ class _SchemaWalker {
             _SchemaLocation(uri: location.uri, pointer: minContainsPointer),
           );
         }
+        if (containsType != null && minContains == null) {
+          minContains = 1;
+        }
 
         int? maxContains;
         final maxContainsRaw = workingSchema['maxContains'];
-        final maxContainsPointer = _pointerChild(location.pointer, 'maxContains');
+        final maxContainsPointer = _pointerChild(
+          location.pointer,
+          'maxContains',
+        );
         if (maxContainsRaw is int) {
           maxContains = maxContainsRaw;
         } else if (maxContainsRaw != null) {
@@ -677,8 +683,10 @@ class _SchemaWalker {
         TypeRef? unevaluatedItemsType;
         var disallowUnevaluatedItems = false;
         final unevaluatedRaw = workingSchema['unevaluatedItems'];
-        final unevaluatedPointer =
-            _pointerChild(location.pointer, 'unevaluatedItems');
+        final unevaluatedPointer = _pointerChild(
+          location.pointer,
+          'unevaluatedItems',
+        );
         if (unevaluatedRaw is bool) {
           if (!unevaluatedRaw) {
             disallowUnevaluatedItems = true;
@@ -1094,7 +1102,11 @@ class _SchemaWalker {
   ) {
     if (schema == null) return null;
     if (schema case {'\$id': final String idValue}) {
-      final canonical = _resolveIdentifierUri(idValue, baseUri, _SchemaLocation(uri: baseUri, pointer: '#'));
+      final canonical = _resolveIdentifierUri(
+        idValue,
+        baseUri,
+        _SchemaLocation(uri: baseUri, pointer: '#'),
+      );
       if (canonical != baseUri) {
         return _lookupAnchor(canonical, anchor);
       }
@@ -1118,7 +1130,10 @@ class _SchemaWalker {
         for (var i = 0; i < value.length; i++) {
           final element = value[i];
           if (element is Map<String, dynamic>) {
-            final childPointer = _pointerChild(_pointerChild('#', entry.key), '$i');
+            final childPointer = _pointerChild(
+              _pointerChild('#', entry.key),
+              '$i',
+            );
             final result = _findAnchor(element, baseUri, anchor);
             if (result != null) {
               return _SchemaLocation(uri: result.uri, pointer: childPointer);
@@ -1137,13 +1152,19 @@ class _SchemaWalker {
   ) {
     if (schema == null) return null;
     if (schema case {'\$id': final String idValue}) {
-      final canonical = _resolveIdentifierUri(idValue, baseUri, _SchemaLocation(uri: baseUri, pointer: '#'));
+      final canonical = _resolveIdentifierUri(
+        idValue,
+        baseUri,
+        _SchemaLocation(uri: baseUri, pointer: '#'),
+      );
       if (canonical != baseUri) {
         return _lookupDynamicAnchor(canonical, anchor);
       }
     }
 
-    if (schema case {'\$dynamicAnchor': final String value} when value == anchor) {
+    if (schema case {
+      '\$dynamicAnchor': final String value,
+    } when value == anchor) {
       final location = _SchemaLocation(uri: baseUri, pointer: '#');
       _registerDynamicAnchor(baseUri, anchor, location);
       return location;
@@ -1161,7 +1182,10 @@ class _SchemaWalker {
         for (var i = 0; i < value.length; i++) {
           final element = value[i];
           if (element is Map<String, dynamic>) {
-            final childPointer = _pointerChild(_pointerChild('#', entry.key), '$i');
+            final childPointer = _pointerChild(
+              _pointerChild('#', entry.key),
+              '$i',
+            );
             final result = _findDynamicAnchor(element, baseUri, anchor);
             if (result != null) {
               return _SchemaLocation(uri: result.uri, pointer: childPointer);
@@ -2015,32 +2039,22 @@ class _SchemaWalker {
       if (entry.name == fragment) {
         final document = _loadDocument(entry.location.uri);
         final schema = _schemaAtPointer(document, entry.location.pointer);
-        return _ResolvedSchema(
-          schema: schema,
-          location: entry.location,
-        );
+        return _ResolvedSchema(schema: schema, location: entry.location);
       }
     }
 
     final dynamicAnchorLocation = _lookupDynamicAnchor(targetUri, fragment);
     if (dynamicAnchorLocation != null) {
       final document = _loadDocument(dynamicAnchorLocation.uri);
-      final schema =
-          _schemaAtPointer(document, dynamicAnchorLocation.pointer);
-      return _ResolvedSchema(
-        schema: schema,
-        location: dynamicAnchorLocation,
-      );
+      final schema = _schemaAtPointer(document, dynamicAnchorLocation.pointer);
+      return _ResolvedSchema(schema: schema, location: dynamicAnchorLocation);
     }
 
     final anchorLocation = _lookupAnchor(targetUri, fragment);
     if (anchorLocation != null) {
       final document = _loadDocument(anchorLocation.uri);
       final schema = _schemaAtPointer(document, anchorLocation.pointer);
-      return _ResolvedSchema(
-        schema: schema,
-        location: anchorLocation,
-      );
+      return _ResolvedSchema(schema: schema, location: anchorLocation);
     }
 
     _log('Unable to resolve dynamicRef $ref at ${_describeLocation(context)}');
