@@ -165,3 +165,45 @@ class ListTypeRef extends TypeRef {
   @override
   String get identity => 'list:${itemType.identity}';
 }
+
+class FormatTypeRef extends TypeRef {
+  const FormatTypeRef({
+    required this.format,
+    required this.typeName,
+    required String Function(String source) deserialize,
+    required String Function(String value) serialize,
+    this.helperTypeName,
+  }) : _deserialize = deserialize,
+       _serialize = serialize;
+
+  final String format;
+  final String typeName;
+  final String? helperTypeName;
+  final String Function(String source) _deserialize;
+  final String Function(String value) _serialize;
+
+  @override
+  String dartType({bool nullable = false}) =>
+      nullable ? '$typeName?' : typeName;
+
+  @override
+  String deserializeInline(String sourceExpression, {required bool required}) {
+    final casted = '($sourceExpression as String)';
+    final parsed = _deserialize(casted);
+    if (required) {
+      return parsed;
+    }
+    return '$sourceExpression == null ? null : ${_deserialize('($sourceExpression as String)')}';
+  }
+
+  @override
+  String serializeInline(String valueExpression, {required bool required}) {
+    return _serialize(valueExpression);
+  }
+
+  @override
+  bool get requiresConversionOnSerialize => true;
+
+  @override
+  String get identity => 'format:$format:$typeName';
+}

@@ -7,12 +7,14 @@ class SchemaIr {
     required this.classes,
     required this.enums,
     required this.unions,
+    required this.helpers,
   });
 
   final IrClass rootClass;
   final List<IrClass> classes;
   final List<IrEnum> enums;
   final List<IrUnion> unions;
+  final List<IrHelper> helpers;
 }
 
 /// Represents an immutable Dart class derived from a JSON schema object.
@@ -46,6 +48,11 @@ class IrProperty {
     required this.typeRef,
     required this.isRequired,
     this.description,
+    this.format,
+    this.validation,
+    this.isDeprecated = false,
+    this.defaultValue,
+    this.examples = const <Object?>[],
   });
 
   final String jsonName;
@@ -53,6 +60,11 @@ class IrProperty {
   final TypeRef typeRef;
   final bool isRequired;
   final String? description;
+  final String? format;
+  final PropertyValidationRules? validation;
+  final bool isDeprecated;
+  final Object? defaultValue;
+  final List<Object?> examples;
 
   String get dartType => typeRef.dartType(nullable: !isRequired);
 
@@ -191,4 +203,48 @@ class JsonConditionals {
   final Map<String, dynamic>? ifSchema;
   final Map<String, dynamic>? thenSchema;
   final Map<String, dynamic>? elseSchema;
+}
+
+class PropertyValidationRules {
+  const PropertyValidationRules({
+    this.minLength,
+    this.maxLength,
+    this.minimum,
+    this.maximum,
+    this.exclusiveMinimum = false,
+    this.exclusiveMaximum = false,
+    this.pattern,
+    this.constValue,
+  });
+
+  final int? minLength;
+  final int? maxLength;
+  final num? minimum;
+  final num? maximum;
+  final bool exclusiveMinimum;
+  final bool exclusiveMaximum;
+  final String? pattern;
+  final Object? constValue;
+
+  bool get hasRules =>
+      minLength != null ||
+      maxLength != null ||
+      minimum != null ||
+      maximum != null ||
+      pattern != null ||
+      constValue != null;
+}
+
+class IrHelper {
+  const IrHelper({
+    required this.name,
+    required this.code,
+    this.imports = const <String>{},
+  });
+
+  final String name;
+  final String code;
+  final Set<String> imports;
+
+  String get fileName => '${_Naming.fileNameFromType(name)}.dart';
 }

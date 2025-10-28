@@ -81,4 +81,10 @@ Future<void> main(List<String> arguments) async {
   final barrel = File(p.join(generatedDir.path, 'index.dart'))
     ..writeAsStringSync(rewrittenBarrel);
   stdout.writeln('Wrote ${barrel.path}');
+
+  if (plan.readmeFileName != null && plan.readmeContents != null) {
+    final readmeFile = File(p.join(generatedDir.path, plan.readmeFileName!))
+      ..writeAsStringSync(plan.readmeContents!);
+    stdout.writeln('Wrote ${readmeFile.path}');
+  }
 }

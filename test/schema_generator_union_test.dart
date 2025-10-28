@@ -144,32 +144,32 @@ sealed class Step {
 }
 
 class Run extends Step {
-  final dynamic type;
   final String run;
+  final dynamic type;
 
   const Run({
-    required this.type,
     required this.run,
+    required this.type,
   }) : super();
 
   factory Run.fromJson(Map<String, dynamic> json) {
     final remaining = Map<String, dynamic>.from(json);
-    final type = json['type'];
-    remaining.remove('type');
     final run = json['run'] as String;
     remaining.remove('run');
+    final type = json['type'];
+    remaining.remove('type');
     var unmatched = Map<String, dynamic>.from(remaining);
     return Run(
-      type: type,
       run: run,
+      type: type,
     );
   }
 
   @override
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{};
-    map['type'] = type;
     map['run'] = run;
+    map['type'] = type;
     map['type'] = 'run';
     return map;
   }

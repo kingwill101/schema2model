@@ -56,6 +56,7 @@ class _SchemaWalker {
        _usedEnumNames = <String>{},
        _classByLocation = <_SchemaCacheKey, IrClass>{},
        _enumByLocation = <_SchemaCacheKey, IrEnum>{},
+       _helpers = LinkedHashMap<String, IrHelper>(),
        _rootUri = baseUri,
        _documentLoader = documentLoader,
        _documentCache = {baseUri: _rootSchema};
@@ -70,6 +71,7 @@ class _SchemaWalker {
   final Set<String> _usedEnumNames;
   final Map<_SchemaCacheKey, IrClass> _classByLocation;
   final Map<_SchemaCacheKey, IrEnum> _enumByLocation;
+  final LinkedHashMap<String, IrHelper> _helpers;
   final Uri _rootUri;
   final SchemaDocumentLoader _documentLoader;
   final Map<Uri, Map<String, dynamic>> _documentCache;
@@ -80,11 +82,15 @@ class _SchemaWalker {
     _processDefinitions(_rootSchema, rootLocation);
     final classes = _orderedClasses(root);
     final enums = _enums.values.toList(growable: false);
+    if (_options.emitValidationHelpers) {
+      _helpers.putIfAbsent(_validationHelper.name, () => _validationHelper);
+    }
     return SchemaIr(
       rootClass: root,
       classes: classes,
       enums: enums,
       unions: List<IrUnion>.unmodifiable(_unions),
+      helpers: List<IrHelper>.unmodifiable(_helpers.values),
     );
   }
 
@@ -177,23 +183,23 @@ class _SchemaWalker {
       return typeRef;
     }
 
-    Map<String, dynamic>? workingSchema = schema;
+    Map<String, dynamic> workingSchema = schema;
     if (workingSchema case {'allOf': final List allOf} when allOf.isNotEmpty) {
       workingSchema = _mergeAllOfSchemas(workingSchema, location);
     }
 
-    _processDefinitions(workingSchema ?? const {}, location);
+    _processDefinitions(workingSchema, location);
 
-    final enumValues = workingSchema?['enum'];
+    final enumValues = workingSchema['enum'];
     if (enumValues is List &&
         enumValues.isNotEmpty &&
         enumValues.every((value) => value is String)) {
       final enumName = _allocateEnumName(
-        workingSchema?['title'] as String? ??
+        workingSchema['title'] as String? ??
             suggestedClassName ??
             _nameFromPointer(location.pointer),
       );
-      final description = workingSchema?['description'] as String?;
+      final description = workingSchema['description'] as String?;
       final spec = _enums.putIfAbsent(
         enumName,
         () => IrEnum(
@@ -237,20 +243,19 @@ class _SchemaWalker {
       }
     }
 
-    final type = workingSchema?['type'];
+    final type = workingSchema['type'];
     final normalizedType = _normalizeTypeKeyword(type);
 
-    if (normalizedType == 'object' ||
-        workingSchema?.containsKey('properties') == true) {
+    if (normalizedType == 'object' || workingSchema.containsKey('properties')) {
       final className = _allocateClassName(
-        workingSchema?['title'] as String? ??
+        workingSchema['title'] as String? ??
             suggestedClassName ??
             _nameFromPointer(location.pointer),
       );
       final spec = _classes.putIfAbsent(className, () {
         final objSpec = IrClass(
           name: className,
-          description: workingSchema?['description'] as String?,
+          description: workingSchema['description'] as String?,
           properties: [],
           conditionals: JsonConditionals(
             ifSchema: schema['if'] as Map<String, dynamic>?,
@@ -261,7 +266,7 @@ class _SchemaWalker {
         final locationKey = _SchemaCacheKey(location.uri, location.pointer);
         _classByLocation[locationKey] = objSpec;
         _typeCache[cacheKey] = ObjectTypeRef(objSpec);
-        _populateObjectSpec(objSpec, workingSchema ?? const {}, location);
+        _populateObjectSpec(objSpec, workingSchema, location);
         return objSpec;
       });
 
@@ -270,8 +275,27 @@ class _SchemaWalker {
       return ref;
     }
 
+    if (normalizedType == 'string') {
+      final format = workingSchema['format'] as String?;
+      final hint = _lookupFormatHint(format);
+      if (hint != null && _options.enableFormatHints) {
+        if (hint.helper != null) {
+          _helpers.putIfAbsent(hint.helper!.name, () => hint.helper!);
+        }
+        final ref = FormatTypeRef(
+          format: hint.name,
+          typeName: hint.typeName,
+          deserialize: hint.deserialize,
+          serialize: hint.serialize,
+          helperTypeName: hint.helper?.name,
+        );
+        _typeCache[cacheKey] = ref;
+        return ref;
+      }
+    }
+
     if (normalizedType == 'array') {
-      final items = workingSchema?['items'];
+      final items = workingSchema['items'];
       final itemPointer = _pointerChild(location.pointer, 'items');
       final itemType = _resolveSchema(
         items is Map<String, dynamic> ? items : null,
@@ -336,8 +360,10 @@ class _SchemaWalker {
         resolved.location,
         index,
       );
-      final variantKey =
-          _SchemaCacheKey(resolved.location.uri, resolved.location.pointer);
+      final variantKey = _SchemaCacheKey(
+        resolved.location.uri,
+        resolved.location.pointer,
+      );
       TypeRef typeRef;
       final cachedRef = _typeCache[variantKey];
       if (cachedRef != null) {
@@ -364,7 +390,9 @@ class _SchemaWalker {
     final cacheKey = _SchemaCacheKey(location.uri, location.pointer);
     if (!allObjects) {
       final first = variantTypes.first;
-      final same = variantTypes.every((type) => type.identity == first.identity);
+      final same = variantTypes.every(
+        (type) => type.identity == first.identity,
+      );
       final fallback = same ? first : const DynamicTypeRef();
       _typeCache[cacheKey] = fallback;
       return fallback;
@@ -401,9 +429,7 @@ class _SchemaWalker {
         continue;
       }
       final spec = typeRef.spec;
-      if (spec.superClassName == null) {
-        spec.superClassName = baseClass.name;
-      }
+      spec.superClassName ??= baseClass.name;
       final requiredProperties = _requiredPropertiesFromSchema(resolved.schema);
       final constProperties = _constPropertiesFromSchema(resolved.schema);
       variants.add(
@@ -481,8 +507,8 @@ class _SchemaWalker {
     _SchemaLocation location,
   ) {
     String? mergedDescription = schema['description'] as String?;
-    final mergedRequired = LinkedHashSet<String>();
-    final mergedProperties = LinkedHashMap<String, Map<String, dynamic>>();
+    final mergedRequired = <String>{};
+    final mergedProperties = <String, Map<String, dynamic>>{};
     final propertyPointers = <String, String>{};
     var isObject =
         _normalizeTypeKeyword(schema['type']) == 'object' ||
@@ -610,7 +636,22 @@ class _SchemaWalker {
     final usedFieldNames = <String>{};
 
     if (properties is Map<String, dynamic>) {
-      for (final entry in properties.entries) {
+      final sortedEntries = properties.entries.toList()
+        ..sort((a, b) {
+          final orderA = _propertyOrder(a.value);
+          final orderB = _propertyOrder(b.value);
+          if (orderA != null && orderB != null) {
+            final compare = orderA.compareTo(orderB);
+            if (compare != 0) return compare;
+          } else if (orderA != null) {
+            return -1;
+          } else if (orderB != null) {
+            return 1;
+          }
+          return a.key.compareTo(b.key);
+        });
+
+      for (final entry in sortedEntries) {
         final key = entry.key;
         final propertySchema = entry.value;
         final propertyPointer = _pointerChild(
@@ -634,12 +675,35 @@ class _SchemaWalker {
             : _Naming.identifier(key);
         usedFieldNames.add(fieldName);
 
+        final format = propertyMap?['format'] as String?;
+        final hint = _lookupFormatHint(format);
+        final deprecated = propertyMap?['deprecated'] == true;
+        final defaultValue = propertyMap?['default'];
+        final examples = propertyMap?['examples'] is List
+            ? (propertyMap?['examples'] as List).cast<Object?>()
+            : const <Object?>[];
+        final description = _composePropertyDescription(
+          description: propertyMap?['description'] as String?,
+          format: format,
+          recognizedFormat: hint != null,
+          convertedFormat: propertyType is FormatTypeRef,
+          deprecated: deprecated,
+          defaultValue: defaultValue,
+          examples: examples,
+        );
+        final validation = _extractValidationRules(propertyMap);
+
         final prop = IrProperty(
           jsonName: key,
           fieldName: fieldName,
           typeRef: propertyType,
           isRequired: isRequired,
-          description: propertyMap?['description'] as String?,
+          description: description,
+          format: format,
+          validation: validation,
+          isDeprecated: deprecated,
+          defaultValue: defaultValue,
+          examples: examples,
         );
         spec.properties.add(prop);
       }
@@ -879,6 +943,157 @@ class _SchemaWalker {
     );
   }
 
+  PropertyValidationRules? _extractValidationRules(
+    Map<String, dynamic>? schema,
+  ) {
+    if (schema == null) {
+      return null;
+    }
+
+    int? minLength;
+    final minLengthRaw = schema['minLength'];
+    if (minLengthRaw is int) {
+      minLength = minLengthRaw;
+    }
+
+    int? maxLength;
+    final maxLengthRaw = schema['maxLength'];
+    if (maxLengthRaw is int) {
+      maxLength = maxLengthRaw;
+    }
+
+    num? minimum;
+    bool exclusiveMinimum = false;
+    final exclusiveMinimumRaw = schema['exclusiveMinimum'];
+    if (exclusiveMinimumRaw is num) {
+      minimum = exclusiveMinimumRaw;
+      exclusiveMinimum = true;
+    } else {
+      final minimumRaw = schema['minimum'];
+      if (minimumRaw is num) {
+        minimum = minimumRaw;
+        exclusiveMinimum = exclusiveMinimumRaw == true;
+      }
+    }
+
+    num? maximum;
+    bool exclusiveMaximum = false;
+    final exclusiveMaximumRaw = schema['exclusiveMaximum'];
+    if (exclusiveMaximumRaw is num) {
+      maximum = exclusiveMaximumRaw;
+      exclusiveMaximum = true;
+    } else {
+      final maximumRaw = schema['maximum'];
+      if (maximumRaw is num) {
+        maximum = maximumRaw;
+        exclusiveMaximum = exclusiveMaximumRaw == true;
+      }
+    }
+
+    final patternRaw = schema['pattern'];
+    final pattern = patternRaw is String ? patternRaw : null;
+
+    Object? constValue;
+    if (schema.containsKey('const')) {
+      final raw = schema['const'];
+      if (raw is String || raw is num || raw is bool || raw == null) {
+        constValue = raw;
+      }
+    }
+
+    if (minLength == null &&
+        maxLength == null &&
+        minimum == null &&
+        maximum == null &&
+        pattern == null &&
+        constValue == null) {
+      return null;
+    }
+
+    return PropertyValidationRules(
+      minLength: minLength,
+      maxLength: maxLength,
+      minimum: minimum,
+      maximum: maximum,
+      exclusiveMinimum: exclusiveMinimum,
+      exclusiveMaximum: exclusiveMaximum,
+      pattern: pattern,
+      constValue: constValue,
+    );
+  }
+
+  int? _propertyOrder(Object? schema) {
+    if (schema is Map<String, dynamic>) {
+      final raw = schema['propertyOrder'];
+      if (raw is num) {
+        return raw.toInt();
+      }
+    }
+    return null;
+  }
+
+  String _stringifyMetadataValue(Object? value) {
+    if (value is String) {
+      return "'$value'";
+    }
+    if (value is num || value is bool) {
+      return value.toString();
+    }
+    if (value == null) {
+      return 'null';
+    }
+    return value.toString();
+  }
+
+  String? _composePropertyDescription({
+    String? description,
+    String? format,
+    required bool recognizedFormat,
+    required bool convertedFormat,
+    required bool deprecated,
+    Object? defaultValue,
+    List<Object?>? examples,
+  }) {
+    final sections = <String>[];
+    final base = description?.trim();
+    if (base != null && base.isNotEmpty) {
+      sections.add(base);
+    }
+
+    if (deprecated) {
+      sections.add('Deprecated.');
+    }
+
+    if (defaultValue != null) {
+      sections.add('Default: ${_stringifyMetadataValue(defaultValue)}.');
+    }
+
+    if (examples != null && examples.isNotEmpty) {
+      final rendered = examples.map(_stringifyMetadataValue).join(', ');
+      sections.add('Examples: $rendered.');
+    }
+
+    if (format != null && format.trim().isNotEmpty) {
+      if (!recognizedFormat) {
+        sections.add(
+          'Format: $format (unsupported format, emitted as String).',
+        );
+      } else if (!convertedFormat) {
+        final reason = _options.enableFormatHints
+            ? 'conversion not applied'
+            : 'format hints disabled';
+        sections.add('Format: $format ($reason).');
+      } else {
+        sections.add('Format: $format.');
+      }
+    }
+
+    if (sections.isEmpty) {
+      return null;
+    }
+    return sections.join('\n\n');
+  }
+
   _ResolvedSchema _resolveReference(String ref, _SchemaLocation context) {
     if (_isRelativeJsonPointer(ref)) {
       final pointer = _resolveRelativeJsonPointer(ref, context.pointer);
@@ -1115,4 +1330,135 @@ class _SchemaWalker {
     }
     return '${baseName}Variant${index + 1}';
   }
+
+  _FormatHint? _lookupFormatHint(String? format) {
+    if (format == null || format.isEmpty) {
+      return null;
+    }
+    return _formatHintTable[format];
+  }
 }
+
+class _FormatHint {
+  const _FormatHint({
+    required this.name,
+    required this.typeName,
+    required this.deserialize,
+    required this.serialize,
+    this.helper,
+  });
+
+  final String name;
+  final String typeName;
+  final String Function(String source) deserialize;
+  final String Function(String value) serialize;
+  final IrHelper? helper;
+}
+
+const IrHelper _emailAddressHelper = IrHelper(
+  name: 'EmailAddress',
+  code: '''
+/// Value type representing an email address.
+/// Generated because the originating schema used `format: email`.
+class EmailAddress {
+  const EmailAddress(this.value);
+
+  final String value;
+
+  String toJson() => value;
+
+  @override
+  String toString() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is EmailAddress && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+''',
+);
+
+const IrHelper _uuidValueHelper = IrHelper(
+  name: 'UuidValue',
+  code: '''
+/// Value type representing a UUID string.
+/// Generated because the originating schema used `format: uuid`.
+class UuidValue {
+  const UuidValue(this.value);
+
+  final String value;
+
+  String toJson() => value;
+
+  @override
+  String toString() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is UuidValue && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+''',
+);
+
+final Map<String, _FormatHint> _formatHintTable = <String, _FormatHint>{
+  'date-time': _FormatHint(
+    name: 'date-time',
+    typeName: 'DateTime',
+    deserialize: (source) => 'DateTime.parse($source)',
+    serialize: (value) => '$value.toIso8601String()',
+  ),
+  'uri': _FormatHint(
+    name: 'uri',
+    typeName: 'Uri',
+    deserialize: (source) => 'Uri.parse($source)',
+    serialize: (value) => '$value.toString()',
+  ),
+  'email': _FormatHint(
+    name: 'email',
+    typeName: 'EmailAddress',
+    deserialize: (source) => 'EmailAddress($source)',
+    serialize: (value) => '$value.toJson()',
+    helper: _emailAddressHelper,
+  ),
+  'uuid': _FormatHint(
+    name: 'uuid',
+    typeName: 'UuidValue',
+    deserialize: (source) => 'UuidValue($source)',
+    serialize: (value) => '$value.toJson()',
+    helper: _uuidValueHelper,
+  ),
+};
+
+const IrHelper _validationHelper = IrHelper(
+  name: 'ValidationError',
+  code: '''
+String _appendJsonPointer(String pointer, String token) {
+  final escaped = token.replaceAll('~', '~0').replaceAll('/', '~1');
+  if (pointer.isEmpty) return '/' + escaped;
+  return pointer + '/' + escaped;
+}
+
+Never _throwValidationError(String pointer, String keyword, String message) =>
+    throw ValidationError(pointer: pointer, keyword: keyword, message: message);
+
+class ValidationError implements Exception {
+  ValidationError({
+    required this.pointer,
+    required this.keyword,
+    required this.message,
+  });
+
+  final String pointer;
+  final String keyword;
+  final String message;
+
+  @override
+  String toString() => 'ValidationError(' + keyword + ' @ ' + pointer + ': ' + message + ')';
+}
+''',
+);

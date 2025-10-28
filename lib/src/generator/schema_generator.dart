@@ -45,17 +45,23 @@ class SchemaGenerator {
     return buffer.toString();
   }
 
+  String? buildReadmeSnippet(SchemaIr ir) => _buildReadmeSnippet(ir);
+
   MultiOutputPlan planMultiFile(SchemaIr ir, {required String baseName}) {
     final emitter = _SchemaEmitter(options);
     emitter.setUnions(ir.unions);
     final partsDirectory = '${_sanitizeBaseName(baseName)}_generated';
     final files = <String, String>{};
+    final readmeSnippet = _buildReadmeSnippet(ir);
     final fileNameByType = <String, String>{
       for (final klass in ir.classes)
         klass.name: '${_Naming.fileNameFromType(klass.name)}.dart',
       for (final enumeration in ir.enums)
         enumeration.name: '${_Naming.fileNameFromType(enumeration.name)}.dart',
     };
+    for (final helper in ir.helpers) {
+      fileNameByType[helper.name] = helper.fileName;
+    }
     final unionByBase = {
       for (final union in ir.unions) union.baseClass.name: union,
     };
@@ -65,8 +71,7 @@ class SchemaGenerator {
     };
 
     for (final union in ir.unions) {
-      final baseFile =
-          '${_Naming.fileNameFromType(union.baseClass.name)}.dart';
+      final baseFile = '${_Naming.fileNameFromType(union.baseClass.name)}.dart';
       for (final variant in union.variants) {
         fileNameByType[variant.classSpec.name] = baseFile;
       }
@@ -82,30 +87,25 @@ class SchemaGenerator {
       final fileName = '${_Naming.fileNameFromType(klass.name)}.dart';
       final union = unionByBase[klass.name];
       if (union != null) {
-        final variantClasses =
-            union.variants.map((variant) => variant.classSpec).toList();
-        final variantNames = variantClasses.map((variant) => variant.name).toSet();
+        final variantClasses = union.variants
+            .map((variant) => variant.classSpec)
+            .toList();
+        final variantNames = variantClasses
+            .map((variant) => variant.name)
+            .toSet();
 
-        final dependencies =
-            _dependenciesForClass(
-              klass,
-              unionByBase: unionByBase,
-              unionVariants: unionVariantLookup,
-            )
-                .where((type) => !variantNames.contains(type))
-                .toSet();
+        final dependencies = _dependenciesForClass(
+          klass,
+          unionByBase: unionByBase,
+          unionVariants: unionVariantLookup,
+        ).where((type) => !variantNames.contains(type)).toSet();
 
         for (final variant in variantClasses) {
-          final variantDeps =
-              _dependenciesForClass(
-                variant,
-                unionByBase: unionByBase,
-                unionVariants: unionVariantLookup,
-              )
-                  .where(
-                    (type) =>
-                        type != klass.name && !variantNames.contains(type),
-                  );
+          final variantDeps = _dependenciesForClass(
+            variant,
+            unionByBase: unionByBase,
+            unionVariants: unionVariantLookup,
+          ).where((type) => type != klass.name && !variantNames.contains(type));
           dependencies.addAll(variantDeps);
         }
 
@@ -119,8 +119,7 @@ class SchemaGenerator {
             ),
           );
         for (final variant in variantClasses) {
-          final partFile =
-              '${_Naming.fileNameFromType(variant.name)}.dart';
+          final partFile = '${_Naming.fileNameFromType(variant.name)}.dart';
           content.writeln("part '$partFile';");
         }
         if (variantClasses.isNotEmpty) {
@@ -173,6 +172,19 @@ class SchemaGenerator {
       files[fileName] = content.toString();
     }
 
+    for (final helper in ir.helpers) {
+      final content = StringBuffer()..write(_buildHeader());
+      if (helper.imports.isNotEmpty) {
+        for (final import in helper.imports) {
+          content.writeln("import '$import';");
+        }
+        content.writeln();
+      }
+      content.write(helper.code.trim());
+      content.writeln();
+      files[helper.fileName] = content.toString();
+    }
+
     final barrel = StringBuffer()..write(_buildHeader());
     for (final entry in files.keys) {
       if (partFiles.contains(entry)) {
@@ -185,6 +197,8 @@ class SchemaGenerator {
       barrel: barrel.toString(),
       files: LinkedHashMap.of(files),
       partsDirectory: partsDirectory,
+      readmeFileName: readmeSnippet != null ? 'README.schema.md' : null,
+      readmeContents: readmeSnippet,
     );
   }
 
@@ -245,6 +259,10 @@ class SchemaGenerator {
       collected.add(variantUnion.baseClass.name);
     }
 
+    if (_classNeedsValidation(klass, options)) {
+      collected.add('ValidationError');
+    }
+
     return collected;
   }
 
@@ -260,6 +278,11 @@ class SchemaGenerator {
       }
     } else if (ref is EnumTypeRef) {
       out.add(ref.spec.name);
+    } else if (ref is FormatTypeRef) {
+      final helper = ref.helperTypeName;
+      if (helper != null) {
+        out.add(helper);
+      }
     } else if (ref is ListTypeRef) {
       _collectTypeDependencies(ref.itemType, out, owner: owner);
     }
@@ -286,6 +309,81 @@ class SchemaGenerator {
       buffer.writeln("import '$file';");
     }
     buffer.writeln();
+    return buffer.toString();
+  }
+
+  String? _buildReadmeSnippet(SchemaIr ir) {
+    if (!options.emitReadmeSnippets) {
+      return null;
+    }
+
+    final buffer = StringBuffer();
+    final rootClass = ir.rootClass;
+    final rootDescription = rootClass.description?.trim();
+
+    buffer.writeln('# Schema Summary: ${options.effectiveRootClassName}');
+    buffer.writeln();
+
+    if (options.sourcePath != null) {
+      buffer.writeln('- Source: `${options.sourcePath}`');
+    }
+    buffer.writeln('- Root type: `${rootClass.name}`');
+    buffer.writeln('- Classes: ${ir.classes.length}');
+    buffer.writeln('- Enums: ${ir.enums.length}');
+    buffer.writeln(
+      '- Format hints: ${options.enableFormatHints ? 'enabled' : 'disabled'}',
+    );
+    buffer.writeln(
+      '- Validation helpers: ${options.emitValidationHelpers ? 'enabled' : 'disabled'}',
+    );
+    buffer.writeln();
+
+    if (rootDescription != null && rootDescription.isNotEmpty) {
+      buffer.writeln(rootDescription);
+      buffer.writeln();
+    }
+
+    final rootProperties = rootClass.properties;
+    if (rootProperties.isNotEmpty) {
+      buffer.writeln('## Root Properties');
+      buffer.writeln();
+      buffer.writeln('| Property | Type | Notes |');
+      buffer.writeln('| --- | --- | --- |');
+      for (final property in rootProperties) {
+        final notes = property.description?.split('\n').first.trim();
+        final sanitizedNotes = (notes == null || notes.isEmpty)
+            ? '—'
+            : notes.replaceAll('|', '\\|');
+        buffer.writeln(
+          '| `${property.jsonName}` | `${property.dartType}` | $sanitizedNotes |',
+        );
+      }
+      buffer.writeln();
+    }
+
+    if (ir.enums.isNotEmpty) {
+      buffer.writeln('## Enums');
+      buffer.writeln();
+      for (final enumeration in ir.enums) {
+        buffer.writeln(
+          '- `${enumeration.name}` (${enumeration.values.length} values)',
+        );
+      }
+      buffer.writeln();
+    }
+
+    buffer.writeln('## Generator Options');
+    buffer.writeln();
+    buffer.writeln(
+      '- `enableFormatHints`: ${options.enableFormatHints ? 'true' : 'false'}',
+    );
+    buffer.writeln(
+      '- `emitValidationHelpers`: ${options.emitValidationHelpers ? 'true' : 'false'}',
+    );
+    buffer.writeln(
+      '- `emitReadmeSnippets`: ${options.emitReadmeSnippets ? 'true' : 'false'}',
+    );
+
     return buffer.toString();
   }
 
@@ -342,7 +440,8 @@ class _SchemaEmitter {
       buffer.write(renderClass(ir.classes[i]));
       final isLastClass = i == ir.classes.length - 1;
       final hasEnums = ir.enums.isNotEmpty;
-      if (!isLastClass || hasEnums) {
+      final hasHelpers = ir.helpers.isNotEmpty;
+      if (!isLastClass || hasEnums || hasHelpers) {
         buffer.writeln();
       }
     }
@@ -351,6 +450,21 @@ class _SchemaEmitter {
       buffer.write(renderEnum(ir.enums[i]));
       if (i != ir.enums.length - 1) {
         buffer.writeln();
+      }
+      if (ir.helpers.isNotEmpty && i == ir.enums.length - 1) {
+        buffer.writeln();
+      }
+    }
+
+    if (ir.helpers.isNotEmpty) {
+      final helperCount = ir.helpers.length;
+      for (var i = 0; i < helperCount; i++) {
+        final helper = ir.helpers[i];
+        buffer.write(helper.code.trim());
+        buffer.writeln();
+        if (i != helperCount - 1) {
+          buffer.writeln();
+        }
       }
     }
     return buffer.toString();
@@ -374,8 +488,9 @@ class _SchemaEmitter {
       _writeDocumentation(buffer, klass.description!);
     }
 
-    final extendsClause =
-        klass.superClassName != null ? ' extends ${klass.superClassName}' : '';
+    final extendsClause = klass.superClassName != null
+        ? ' extends ${klass.superClassName}'
+        : '';
     buffer.writeln('class ${klass.name}$extendsClause {');
     _writeFieldDeclarations(buffer, klass);
     buffer.writeln();
@@ -385,6 +500,10 @@ class _SchemaEmitter {
     _writeFromJson(buffer, klass);
     buffer.writeln();
     _writeToJson(buffer, klass);
+    if (_classNeedsValidation(klass, options)) {
+      buffer.writeln();
+      _writeValidate(buffer, klass, override: false);
+    }
     buffer.writeln('}');
     return buffer.toString();
   }
@@ -398,6 +517,10 @@ class _SchemaEmitter {
     buffer.writeln('sealed class ${klass.name} {');
     buffer.writeln('  const ${klass.name}();');
     buffer.writeln();
+    if (options.emitValidationHelpers) {
+      buffer.writeln("  void validate({String pointer = ''});");
+      buffer.writeln();
+    }
     buffer.writeln(
       '  factory ${klass.name}.fromJson(Map<String, dynamic> json) {',
     );
@@ -473,7 +596,7 @@ class _SchemaEmitter {
       for (final variant in requiredVariants) {
         final conditions = variant.requiredProperties
             .map((prop) {
-              return "keys.contains('${prop}')";
+              return "keys.contains('$prop')";
             })
             .join(' && ');
         buffer.writeln('    if ($conditions) {');
@@ -536,6 +659,10 @@ class _SchemaEmitter {
       discriminatorKey: union.discriminator?.propertyName,
       discriminatorValue: variant.discriminatorValue,
     );
+    if (_classNeedsValidation(klass, options)) {
+      buffer.writeln();
+      _writeValidate(buffer, klass, override: true);
+    }
     buffer.writeln('}');
     return buffer.toString();
   }
@@ -671,8 +798,8 @@ class _SchemaEmitter {
 
     final initializerSuffix =
         superInitializer != null && superInitializer.isNotEmpty
-            ? ' $superInitializer'
-            : '';
+        ? ' $superInitializer'
+        : '';
     buffer.writeln('  })$initializerSuffix;');
   }
 
@@ -859,6 +986,311 @@ class _SchemaEmitter {
     buffer.writeln('    return map;');
     buffer.writeln('  }');
   }
+
+  void _writeValidate(
+    StringBuffer buffer,
+    IrClass klass, {
+    required bool override,
+  }) {
+    if (!_classNeedsValidation(klass, options)) {
+      if (override) {
+        buffer.writeln('  @override');
+        buffer.writeln("  void validate({String pointer = ''}) {}");
+      }
+      return;
+    }
+
+    if (override) {
+      buffer.writeln('  @override');
+    }
+    buffer.writeln("  void validate({String pointer = ''}) {");
+
+    for (var index = 0; index < klass.properties.length; index++) {
+      final property = klass.properties[index];
+      final pointerVar = '_ptr$index';
+      final valueVar = '_value$index';
+      final suffix = 'p$index';
+      buffer.writeln(
+        "    final $pointerVar = _appendJsonPointer(pointer, '${property.jsonName}');",
+      );
+      buffer.writeln('    final $valueVar = ${property.fieldName};');
+      if (!property.isRequired) {
+        buffer.writeln('    if ($valueVar != null) {');
+        _writeValidationBodyForProperty(
+          buffer,
+          property,
+          valueVar,
+          pointerVar,
+          indent: '      ',
+          suffix: suffix,
+        );
+        buffer.writeln('    }');
+      } else {
+        _writeValidationBodyForProperty(
+          buffer,
+          property,
+          valueVar,
+          pointerVar,
+          indent: '    ',
+          suffix: suffix,
+        );
+      }
+    }
+
+    final additionalField = klass.additionalPropertiesField;
+    if (additionalField != null &&
+        _typeRequiresValidation(additionalField.valueType)) {
+      final mapVar = '_${additionalField.fieldName}Map';
+      buffer.writeln('    final $mapVar = ${additionalField.fieldName};');
+      buffer.writeln('    if ($mapVar != null) {');
+      buffer.writeln('      $mapVar.forEach((key, value) {');
+      buffer.writeln(
+        '        final itemPointer = _appendJsonPointer(pointer, key);',
+      );
+      _writeNestedValidation(
+        buffer,
+        additionalField.valueType,
+        'value',
+        'itemPointer',
+        '        ',
+        additionalField.fieldName,
+      );
+      buffer.writeln('      });');
+      buffer.writeln('    }');
+    }
+
+    final patternField = klass.patternPropertiesField;
+    if (patternField != null &&
+        _typeRequiresValidation(patternField.valueType)) {
+      final mapVar = '_${patternField.fieldName}Map';
+      buffer.writeln('    final $mapVar = ${patternField.fieldName};');
+      buffer.writeln('    if ($mapVar != null) {');
+      buffer.writeln('      $mapVar.forEach((key, value) {');
+      buffer.writeln(
+        '        final itemPointer = _appendJsonPointer(pointer, key);',
+      );
+      _writeNestedValidation(
+        buffer,
+        patternField.valueType,
+        'value',
+        'itemPointer',
+        '        ',
+        patternField.fieldName,
+      );
+      buffer.writeln('      });');
+      buffer.writeln('    }');
+    }
+
+    buffer.writeln('  }');
+  }
+
+  void _writeValidationBodyForProperty(
+    StringBuffer buffer,
+    IrProperty property,
+    String valueVar,
+    String pointerVar, {
+    required String indent,
+    required String suffix,
+  }) {
+    final rules = property.validation;
+    if (rules != null && rules.hasRules) {
+      _writeValidationRules(
+        buffer,
+        property,
+        rules,
+        valueVar,
+        pointerVar,
+        indent: indent,
+        suffix: suffix,
+      );
+    }
+
+    _writeNestedValidation(
+      buffer,
+      property.typeRef,
+      valueVar,
+      pointerVar,
+      indent,
+      suffix,
+    );
+  }
+
+  void _writeValidationRules(
+    StringBuffer buffer,
+    IrProperty property,
+    PropertyValidationRules rules,
+    String valueVar,
+    String pointerVar, {
+    required String indent,
+    required String suffix,
+  }) {
+    if (rules.minLength != null && _isStringLike(property.typeRef)) {
+      buffer.writeln('${indent}if ($valueVar.length < ${rules.minLength}) {');
+      buffer.writeln(
+        '$indent  _throwValidationError($pointerVar, "minLength", "Expected at least ${rules.minLength} characters but found " + $valueVar.length.toString() + ".");',
+      );
+      buffer.writeln('$indent}');
+    }
+
+    if (rules.maxLength != null && _isStringLike(property.typeRef)) {
+      buffer.writeln('${indent}if ($valueVar.length > ${rules.maxLength}) {');
+      buffer.writeln(
+        '$indent  _throwValidationError($pointerVar, "maxLength", "Expected at most ${rules.maxLength} characters but found " + $valueVar.length.toString() + ".");',
+      );
+      buffer.writeln('$indent}');
+    }
+
+    if (rules.minimum != null && _isNumericType(property.typeRef)) {
+      final comparison = rules.exclusiveMinimum ? '<=' : '<';
+      final keywordComparison = rules.exclusiveMinimum ? '>' : '>=';
+      buffer.writeln('${indent}if ($valueVar $comparison ${rules.minimum}) {');
+      buffer.writeln(
+        '$indent  _throwValidationError($pointerVar, "minimum", "Expected value $keywordComparison ${rules.minimum} but found " + $valueVar.toString() + ".");',
+      );
+      buffer.writeln('$indent}');
+    }
+
+    if (rules.maximum != null && _isNumericType(property.typeRef)) {
+      final comparison = rules.exclusiveMaximum ? '>=' : '>';
+      final keywordComparison = rules.exclusiveMaximum ? '<' : '<=';
+      buffer.writeln('${indent}if ($valueVar $comparison ${rules.maximum}) {');
+      buffer.writeln(
+        '$indent  _throwValidationError($pointerVar, "maximum", "Expected value $keywordComparison ${rules.maximum} but found " + $valueVar.toString() + ".");',
+      );
+      buffer.writeln('$indent}');
+    }
+
+    if (rules.pattern != null && _isStringLike(property.typeRef)) {
+      final patternVar = '_pattern$suffix';
+      buffer.writeln(
+        '${indent}final $patternVar = RegExp(${_stringLiteral(rules.pattern!)});',
+      );
+      buffer.writeln('${indent}if (!$patternVar.hasMatch($valueVar)) {');
+      buffer.writeln(
+        '$indent  _throwValidationError($pointerVar, "pattern", "Expected value to match pattern ${rules.pattern} but found " + $valueVar + ".");',
+      );
+      buffer.writeln('$indent}');
+    }
+
+    if (rules.constValue != null) {
+      final actualExpr = _constComparableExpression(property, valueVar);
+      if (actualExpr != null) {
+        final actualVar = '_actual$suffix';
+        final expectedLiteral = _literalExpression(rules.constValue);
+        buffer.writeln('${indent}final $actualVar = $actualExpr;');
+        buffer.writeln('${indent}if ($actualVar != $expectedLiteral) {');
+        buffer.writeln(
+          '$indent  _throwValidationError($pointerVar, "const", "Expected value equal to $expectedLiteral but found " + $actualVar.toString() + ".");',
+        );
+        buffer.writeln('$indent}');
+      }
+    }
+  }
+
+  void _writeNestedValidation(
+    StringBuffer buffer,
+    TypeRef ref,
+    String valueExpression,
+    String pointerExpression,
+    String indent,
+    String suffix,
+  ) {
+    if (ref is ObjectTypeRef) {
+      buffer.writeln(
+        '$indent$valueExpression.validate(pointer: $pointerExpression);',
+      );
+      return;
+    }
+    if (ref is ListTypeRef) {
+      final indexVar = 'i_$suffix';
+      final itemVar = '_item$suffix';
+      buffer.writeln(
+        '${indent}for (var $indexVar = 0; $indexVar < $valueExpression.length; $indexVar++) {',
+      );
+      buffer.writeln(
+        '$indent  final itemPointer = _appendJsonPointer($pointerExpression, $indexVar.toString());',
+      );
+      buffer.writeln('$indent  final $itemVar = $valueExpression[$indexVar];');
+      _writeNestedValidation(
+        buffer,
+        ref.itemType,
+        itemVar,
+        'itemPointer',
+        '$indent  ',
+        '${suffix}i',
+      );
+      buffer.writeln('$indent}');
+    }
+  }
+
+  bool _isStringLike(TypeRef ref) {
+    return ref is PrimitiveTypeRef && ref.typeName == 'String';
+  }
+
+  bool _isNumericType(TypeRef ref) {
+    if (ref is! PrimitiveTypeRef) {
+      return false;
+    }
+    return ref.typeName == 'int' ||
+        ref.typeName == 'double' ||
+        ref.typeName == 'num';
+  }
+
+  String? _constComparableExpression(IrProperty property, String valueVar) {
+    final ref = property.typeRef;
+    if (ref is PrimitiveTypeRef) {
+      final typeName = ref.typeName;
+      if (typeName == 'String' ||
+          typeName == 'int' ||
+          typeName == 'double' ||
+          typeName == 'num' ||
+          typeName == 'bool') {
+        return valueVar;
+      }
+    }
+    if (ref is FormatTypeRef) {
+      return ref.serializeInline(valueVar, required: true);
+    }
+    return null;
+  }
+}
+
+bool _classNeedsValidation(IrClass klass, SchemaGeneratorOptions options) {
+  if (!options.emitValidationHelpers) {
+    return false;
+  }
+
+  for (final property in klass.properties) {
+    if (property.validation?.hasRules == true) {
+      return true;
+    }
+    if (_typeRequiresValidation(property.typeRef)) {
+      return true;
+    }
+  }
+
+  final additionalField = klass.additionalPropertiesField;
+  if (additionalField != null &&
+      _typeRequiresValidation(additionalField.valueType)) {
+    return true;
+  }
+
+  final patternField = klass.patternPropertiesField;
+  if (patternField != null && _typeRequiresValidation(patternField.valueType)) {
+    return true;
+  }
+
+  return false;
+}
+
+bool _typeRequiresValidation(TypeRef ref) {
+  if (ref is ObjectTypeRef) {
+    return true;
+  }
+  if (ref is ListTypeRef) {
+    return _typeRequiresValidation(ref.itemType);
+  }
+  return false;
 }
 
 class _UnionVariantView {
@@ -873,11 +1305,15 @@ class MultiOutputPlan {
     required this.barrel,
     required this.files,
     required this.partsDirectory,
+    this.readmeFileName,
+    this.readmeContents,
   });
 
   final String barrel;
   final LinkedHashMap<String, String> files;
   final String partsDirectory;
+  final String? readmeFileName;
+  final String? readmeContents;
 }
 
 class _DefaultSchemaDocumentLoader {

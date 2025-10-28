@@ -15,6 +15,9 @@ class SchemaGeneratorOptions {
     this.allowNetworkRefs = false,
     this.networkCachePath,
     this.onWarning,
+    this.enableFormatHints = false,
+    this.emitValidationHelpers = false,
+    this.emitReadmeSnippets = false,
   });
 
   final String? rootClassName;
@@ -29,6 +32,9 @@ class SchemaGeneratorOptions {
   final bool allowNetworkRefs;
   final String? networkCachePath;
   final void Function(String message)? onWarning;
+  final bool enableFormatHints;
+  final bool emitValidationHelpers;
+  final bool emitReadmeSnippets;
 
   SchemaGeneratorOptions copyWith({
     String? inferredRootClass,
@@ -39,6 +45,9 @@ class SchemaGeneratorOptions {
     bool? allowNetworkRefs,
     String? networkCachePath,
     void Function(String message)? onWarning,
+    bool? enableFormatHints,
+    bool? emitValidationHelpers,
+    bool? emitReadmeSnippets,
   }) {
     return SchemaGeneratorOptions(
       rootClassName: rootClassName,
@@ -53,6 +62,10 @@ class SchemaGeneratorOptions {
       allowNetworkRefs: allowNetworkRefs ?? this.allowNetworkRefs,
       networkCachePath: networkCachePath ?? this.networkCachePath,
       onWarning: onWarning ?? this.onWarning,
+      enableFormatHints: enableFormatHints ?? this.enableFormatHints,
+      emitValidationHelpers:
+          emitValidationHelpers ?? this.emitValidationHelpers,
+      emitReadmeSnippets: emitReadmeSnippets ?? this.emitReadmeSnippets,
     );
   }
 
