@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/person",
+  "title": "Person",
+  "type": "object",
+  "properties": {
+    "firstName": {
+      "$ref": "#internal-string",
+      "description": "The person's first name"
+    },
+    "lastName": {
+      "$ref": "#internal-string",
+      "description": "The person's last name"
+    },
+    "email": {
+      "$ref": "#email-format"
+    },
+    "age": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": ["firstName", "lastName"],
+  "$defs": {
+    "nonEmptyString": {
+      "$anchor": "internal-string",
+      "type": "string",
+      "minLength": 1,
+      "description": "A non-empty string"
+    },
+    "emailString": {
+      "$anchor": "email-format",
+      "type": "string",
+      "format": "email",
+      "description": "An email address"
+    }
+  }
+}

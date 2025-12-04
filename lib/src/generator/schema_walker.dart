@@ -232,6 +232,7 @@ class _SchemaWalker {
       ),
       dependentRequired: <String, Set<String>>{},
       dependentSchemas: <String, DependentSchemaConstraint>{},
+      extensionAnnotations: _extractExtensionAnnotations(_rootSchema),
     );
     _classByLocation[_SchemaCacheKey(location.uri, location.pointer)] = klass;
     _classes[fallbackName] = klass;
@@ -504,6 +505,7 @@ class _SchemaWalker {
             ),
             dependentRequired: <String, Set<String>>{},
             dependentSchemas: <String, DependentSchemaConstraint>{},
+            extensionAnnotations: _extractExtensionAnnotations(workingSchema),
           );
           final locationKey = _SchemaCacheKey(location.uri, location.pointer);
           _classByLocation[locationKey] = objSpec;
@@ -870,6 +872,7 @@ class _SchemaWalker {
         ),
         dependentRequired: <String, Set<String>>{},
         dependentSchemas: <String, DependentSchemaConstraint>{},
+        extensionAnnotations: _extractExtensionAnnotations(schema),
       );
       return unionClass;
     });
@@ -1475,6 +1478,10 @@ class _SchemaWalker {
         );
         final validation = _extractValidationRules(propertyMap);
 
+        final extensionAnnotations = propertyMap != null
+            ? _extractExtensionAnnotations(propertyMap)
+            : <String, Object?>{};
+
         final prop = IrProperty(
           jsonName: key,
           fieldName: fieldName,
@@ -1488,6 +1495,7 @@ class _SchemaWalker {
           isDeprecated: deprecated,
           defaultValue: defaultValue,
           examples: examples,
+          extensionAnnotations: extensionAnnotations,
         );
         spec.properties.add(prop);
       }
@@ -1694,6 +1702,20 @@ class _SchemaWalker {
       return true;
     });
     return relevant ?? 'Generated';
+  }
+
+  /// Extracts x-* extension annotations from a schema object.
+  /// Returns a map of extension keywords to their values.
+  static Map<String, Object?> _extractExtensionAnnotations(
+    Map<String, dynamic> schema,
+  ) {
+    final extensions = <String, Object?>{};
+    for (final entry in schema.entries) {
+      if (entry.key.startsWith('x-')) {
+        extensions[entry.key] = entry.value;
+      }
+    }
+    return extensions;
   }
 
   static String? _normalizeTypeKeyword(Object? type) {

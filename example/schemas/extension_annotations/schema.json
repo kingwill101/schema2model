@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExtensionAnnotationsTest",
+  "type": "object",
+  "x-category": "testing",
+  "x-version": "1.0.0",
+  "properties": {
+    "userName": {
+      "type": "string",
+      "description": "The user's name",
+      "x-displayName": "User Name",
+      "x-helpText": "Enter your full name",
+      "x-placeholder": "John Doe"
+    },
+    "age": {
+      "type": "integer",
+      "x-displayName": "Age",
+      "x-validationMessage": "Must be 18 or older",
+      "minimum": 18
+    }
+  },
+  "required": ["userName"]
+}

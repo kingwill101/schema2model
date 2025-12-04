@@ -34,12 +34,14 @@ class IrClass {
     Map<String, Set<String>>? dependentRequired,
     Map<String, DependentSchemaConstraint>? dependentSchemas,
     this.propertyNamesConstraint,
+    Map<String, Object?>? extensionAnnotations,
   }) : conditionalConstraints = List<ConditionalConstraint>.from(
          conditionalConstraints,
        ),
        dependentRequired = dependentRequired ?? <String, Set<String>>{},
        dependentSchemas =
-           dependentSchemas ?? <String, DependentSchemaConstraint>{};
+           dependentSchemas ?? <String, DependentSchemaConstraint>{},
+       extensionAnnotations = extensionAnnotations ?? <String, Object?>{};
 
   final String name;
   final String? description;
@@ -55,6 +57,7 @@ class IrClass {
   final Map<String, Set<String>> dependentRequired;
   final Map<String, DependentSchemaConstraint> dependentSchemas;
   IrPropertyNamesConstraint? propertyNamesConstraint;
+  final Map<String, Object?> extensionAnnotations;
 }
 
 /// Represents a property on an [IrClass].
@@ -72,7 +75,8 @@ class IrProperty {
     this.isDeprecated = false,
     this.defaultValue,
     this.examples = const <Object?>[],
-  });
+    Map<String, Object?>? extensionAnnotations,
+  }) : extensionAnnotations = extensionAnnotations ?? <String, Object?>{};
 
   final String jsonName;
   final String fieldName;
@@ -86,6 +90,7 @@ class IrProperty {
   final Object? defaultValue;
   final List<Object?> examples;
   final String schemaPointer;
+  final Map<String, Object?> extensionAnnotations;
 
   String get dartType => typeRef.dartType(nullable: !isRequired);
 

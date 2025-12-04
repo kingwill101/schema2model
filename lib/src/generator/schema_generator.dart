@@ -515,6 +515,11 @@ class _SchemaEmitter {
     if (klass.description != null && klass.description!.trim().isNotEmpty) {
       _writeDocumentation(buffer, klass.description!);
     }
+    if (klass.extensionAnnotations.isNotEmpty) {
+      for (final entry in klass.extensionAnnotations.entries) {
+        buffer.writeln('/// ${entry.key}: ${entry.value}');
+      }
+    }
 
     final extendsClause = klass.superClassName != null
         ? ' extends ${klass.superClassName}'
@@ -792,6 +797,11 @@ class _SchemaEmitter {
       if (property.description != null &&
           property.description!.trim().isNotEmpty) {
         _writeDocumentation(buffer, property.description!, indent: '  ');
+      }
+      if (property.extensionAnnotations.isNotEmpty) {
+        for (final entry in property.extensionAnnotations.entries) {
+          buffer.writeln('  /// ${entry.key}: ${entry.value}');
+        }
       }
       buffer.writeln('  final ${property.dartType} ${property.fieldName};');
     }
