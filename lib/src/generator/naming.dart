@@ -1,4 +1,4 @@
-part of 'package:schemamodeschema/src/generator.dart';
+part of 'package:schema2model/src/generator.dart';
 
 /// Utility helpers for transforming schema identifiers into Dart-friendly names.
 class _Naming {

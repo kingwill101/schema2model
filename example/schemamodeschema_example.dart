@@ -1,4 +1,4 @@
-// import 'schemas/pubspec.subset.schema.dart';
+// import 'schemas/pubspec_subset/schema.dart';
 
 // void main() {
 //   final pub = Pubspec(

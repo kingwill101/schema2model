@@ -1,2 +1,6 @@
 *generated
 *.schema.dart
+
+# Allow curated generated examples to remain checked in.
+!*/schema_generated/
+!*/schema_generated/**

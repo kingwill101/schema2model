@@ -46,7 +46,7 @@ void main() {
     });
 
     test('collects definitions and conditional keywords', () {
-      final schemaFile = File('example/schemas/github-action.schema.json');
+      final schemaFile = File('example/schemas/github_action/schema.json');
       final schema =
           jsonDecode(schemaFile.readAsStringSync()) as Map<String, dynamic>;
       final generator = SchemaGenerator(

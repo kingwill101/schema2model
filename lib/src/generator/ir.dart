@@ -1,4 +1,4 @@
-part of 'package:schemamodeschema/src/generator.dart';
+part of 'package:schema2model/src/generator.dart';
 
 /// Intermediate representation root describing the generated model set.
 class SchemaIr {
@@ -31,9 +31,15 @@ class IrClass {
     List<ConditionalConstraint> conditionalConstraints = const [],
     this.unevaluatedPropertiesField,
     this.disallowUnevaluatedProperties = false,
+    Map<String, Set<String>>? dependentRequired,
+    Map<String, DependentSchemaConstraint>? dependentSchemas,
+    this.propertyNamesConstraint,
   }) : conditionalConstraints = List<ConditionalConstraint>.from(
          conditionalConstraints,
-       );
+       ),
+       dependentRequired = dependentRequired ?? <String, Set<String>>{},
+       dependentSchemas =
+           dependentSchemas ?? <String, DependentSchemaConstraint>{};
 
   final String name;
   final String? description;
@@ -46,6 +52,9 @@ class IrClass {
   final List<ConditionalConstraint> conditionalConstraints;
   IrDynamicKeyField? unevaluatedPropertiesField;
   bool disallowUnevaluatedProperties;
+  final Map<String, Set<String>> dependentRequired;
+  final Map<String, DependentSchemaConstraint> dependentSchemas;
+  IrPropertyNamesConstraint? propertyNamesConstraint;
 }
 
 /// Represents a property on an [IrClass].
@@ -55,7 +64,9 @@ class IrProperty {
     required this.fieldName,
     required this.typeRef,
     required this.isRequired,
+    required this.schemaPointer,
     this.description,
+    this.title,
     this.format,
     this.validation,
     this.isDeprecated = false,
@@ -68,11 +79,13 @@ class IrProperty {
   final TypeRef typeRef;
   final bool isRequired;
   final String? description;
+  final String? title;
   final String? format;
   final PropertyValidationRules? validation;
   final bool isDeprecated;
   final Object? defaultValue;
   final List<Object?> examples;
+  final String schemaPointer;
 
   String get dartType => typeRef.dartType(nullable: !isRequired);
 
@@ -205,6 +218,20 @@ class IrPatternMatcher {
   final TypeRef typeRef;
 }
 
+class DependentSchemaConstraint {
+  DependentSchemaConstraint({
+    required this.property,
+    required this.schemaPointer,
+    this.typeRef,
+    this.disallow = false,
+  });
+
+  final String property;
+  final String schemaPointer;
+  final TypeRef? typeRef;
+  final bool disallow;
+}
+
 class ConditionalConstraint {
   ConditionalConstraint({
     required this.keyword,
@@ -263,6 +290,20 @@ class PropertyValidationRules {
       maximum != null ||
       pattern != null ||
       constValue != null;
+}
+
+class IrPropertyNamesConstraint {
+  const IrPropertyNamesConstraint({
+    required this.schemaPointer,
+    this.validation,
+    this.disallow = false,
+  });
+
+  final String schemaPointer;
+  final PropertyValidationRules? validation;
+  final bool disallow;
+
+  bool get hasRules => disallow || (validation?.hasRules ?? false);
 }
 
 class IrHelper {

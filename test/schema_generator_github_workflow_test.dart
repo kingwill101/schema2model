@@ -5,7 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:schemamodeschema/src/generator.dart';
 import 'package:test/test.dart';
 
-import '../example/schemas/github-workflow.schema.dart' as model;
+import '../example/schemas/github_workflow/schema.dart' as model;
 
 void main() {
   group('GitHub workflow schema', () {
@@ -15,12 +15,12 @@ void main() {
     setUpAll(() {
       final root = Directory.current.path;
       final schemaFile = File(
-        p.join(root, 'example', 'schemas', 'github-workflow.schema.json'),
+        p.join(root, 'example', 'schemas', 'github_workflow', 'schema.json'),
       );
       expect(
         schemaFile.existsSync(),
         isTrue,
-        reason: 'Expected example/schemas/github-workflow.schema.json to exist',
+        reason: 'Expected example/schemas/github_workflow/schema.json to exist',
       );
       schemaPath = schemaFile.path;
       final decoded = jsonDecode(schemaFile.readAsStringSync());
@@ -33,7 +33,8 @@ void main() {
 
     test('exposes job union variants with heuristic discrimination', () {
       final union = ir.unions.firstWhere(
-        (entry) => entry.baseClass.name == 'RootSchemaJobsPatternProperty1',
+        (entry) =>
+            entry.baseClass.name == 'GithubWorkflowJobsPatternProperty1',
       );
       final variantNames = union.variants
           .map((variant) => variant.classSpec.name)
@@ -69,7 +70,7 @@ void main() {
       expect(
         barrel,
         contains(
-          "export '${plan.partsDirectory}/root_schema_jobs_pattern_property1.dart';",
+          "export '${plan.partsDirectory}/github_workflow_jobs_pattern_property1.dart';",
         ),
       );
     });

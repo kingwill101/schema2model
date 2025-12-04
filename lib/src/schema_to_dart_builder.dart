@@ -2,12 +2,17 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:build/build.dart';
+import 'package:glob/glob.dart';
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
 import 'generator.dart';
 
 class SchemaToDartBuilder implements Builder {
-  SchemaToDartBuilder(this._options);
+  SchemaToDartBuilder(
+    this._options, {
+    List<Glob>? includeGlobs,
+  }) : _includeGlobs = includeGlobs ?? _defaultIncludeGlobs;
 
   factory SchemaToDartBuilder.fromOptions(BuilderOptions options) {
     final rootClass = options.config['root_class'] as String?;
@@ -47,6 +52,12 @@ class SchemaToDartBuilder implements Builder {
       defaultDialect = dialect;
     }
 
+    final includeGlobs = _parseIncludeGlobs(options.config['include_globs']);
+    final emitValidationHelpers = _parseBool(
+      options.config['emit_validation_helpers'],
+      true,
+    );
+
     return SchemaToDartBuilder(
       SchemaGeneratorOptions(
         rootClassName: rootClass,
@@ -58,11 +69,21 @@ class SchemaToDartBuilder implements Builder {
         networkCachePath: networkCachePath,
         onWarning: log.warning,
         defaultDialect: defaultDialect,
+        emitValidationHelpers: emitValidationHelpers,
       ),
+      includeGlobs: includeGlobs,
     );
   }
 
   final SchemaGeneratorOptions _options;
+  final List<Glob> _includeGlobs;
+
+  static final List<Glob> _defaultIncludeGlobs = List.unmodifiable(
+    [
+      Glob('**/*.schema.json'),
+      Glob('**/*.json'),
+    ],
+  );
 
   static bool _parseBool(Object? value, bool fallback) {
     if (value is bool) return value;
@@ -75,14 +96,49 @@ class SchemaToDartBuilder implements Builder {
     return fallback;
   }
 
+  static List<Glob> _parseIncludeGlobs(Object? raw) {
+    if (raw == null) {
+      return _defaultIncludeGlobs;
+    }
+
+    final patterns = <String>[];
+    if (raw is String) {
+      if (raw.trim().isNotEmpty) {
+        patterns.add(raw.trim());
+      }
+    } else if (raw is Iterable) {
+      for (final entry in raw) {
+        if (entry is String && entry.trim().isNotEmpty) {
+          patterns.add(entry.trim());
+        }
+      }
+    } else {
+      throw ArgumentError(
+        'include_globs must be a String or List<String>, got ${raw.runtimeType}.',
+      );
+    }
+
+    if (patterns.isEmpty) {
+      return _defaultIncludeGlobs;
+    }
+
+    return List.unmodifiable(patterns.map(Glob.new));
+  }
+
   @override
   Map<String, List<String>> get buildExtensions => const {
-    '.schema.json': ['.schema.dart'],
-  };
+        '.json': ['.dart'],
+      };
 
   @override
   Future<void> build(BuildStep buildStep) async {
     final inputId = buildStep.inputId;
+    if (!_matchesInclude(inputId.path)) {
+      log.fine(
+        '${inputId.path}: Skipping because it does not match configured include_globs.',
+      );
+      return;
+    }
     final rawContents = await buildStep.readAsString(inputId);
     final schema = jsonDecode(rawContents);
 
@@ -99,7 +155,7 @@ class SchemaToDartBuilder implements Builder {
     final baseUri = Uri.file(absoluteInputPath);
     final cachePath =
         _options.networkCachePath ??
-        p.join('.dart_tool', 'schemamodeschema', 'cache');
+        p.join('.dart_tool', 'schema2model', 'cache');
     final absoluteCachePath = p.isAbsolute(cachePath)
         ? cachePath
         : p.join(Directory.current.path, cachePath);
@@ -124,6 +180,18 @@ class SchemaToDartBuilder implements Builder {
     final plan = generator.planMultiFile(ir, baseName: baseName);
     await buildStep.writeAsString(outputId, plan.barrel);
     await _writeSplitOutputs(inputId, plan);
+  }
+
+  @visibleForTesting
+  bool matchesInclude(String path) => _matchesInclude(path);
+
+  bool _matchesInclude(String path) {
+    for (final glob in _includeGlobs) {
+      if (glob.matches(path)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   String _inferRootClassName(Map<String, dynamic> schema, AssetId id) {

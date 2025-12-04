@@ -14,12 +14,12 @@ void main() {
     setUpAll(() {
       final root = Directory.current.path;
       final schemaFile = File(
-        p.join(root, 'example', 'schemas', 'github-action.schema.json'),
+        p.join(root, 'example', 'schemas', 'github_action/schema.json'),
       );
       expect(
         schemaFile.existsSync(),
         isTrue,
-        reason: 'Expected example/schemas/github-action.schema.json to exist',
+        reason: 'Expected example/schemas/github_action/schema.json to exist',
       );
       schemaPath = schemaFile.path;
       final decoded = jsonDecode(schemaFile.readAsStringSync());

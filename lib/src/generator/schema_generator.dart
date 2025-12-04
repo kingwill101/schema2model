@@ -1,4 +1,4 @@
-part of 'package:schemamodeschema/src/generator.dart';
+part of 'package:schema2model/src/generator.dart';
 
 /// Entrypoint that turns a JSON schema map into Dart source code.
 class SchemaGenerator {
@@ -256,6 +256,13 @@ class SchemaGenerator {
       }
     }
 
+    for (final constraint in klass.dependentSchemas.values) {
+      final ref = constraint.typeRef;
+      if (ref != null) {
+        _collectTypeDependencies(ref, collected, owner: klass.name);
+      }
+    }
+
     final baseUnion = unionByBase[klass.name];
     if (baseUnion != null) {
       collected.addAll(
@@ -268,7 +275,7 @@ class SchemaGenerator {
       collected.add(variantUnion.baseClass.name);
     }
 
-    if (_classNeedsValidation(klass, options)) {
+    if (options.emitValidationHelpers) {
       collected.add('ValidationError');
     }
 
@@ -436,6 +443,7 @@ class _SchemaEmitter {
   final SchemaGeneratorOptions options;
   Map<String, IrUnion> _unionByBaseName = const {};
   Map<String, _UnionVariantView> _unionVariantByClass = const {};
+  final Set<String> _validatedClassNames = <String>{};
 
   void setUnions(List<IrUnion> unions) {
     _unionByBaseName = {
@@ -520,7 +528,11 @@ class _SchemaEmitter {
     _writeFromJson(buffer, klass);
     buffer.writeln();
     _writeToJson(buffer, klass);
-    if (_classNeedsValidation(klass, options)) {
+    final needsValidation = _classNeedsValidation(klass, options);
+    if (needsValidation) {
+      _validatedClassNames.add(klass.name);
+    }
+    if (options.emitValidationHelpers) {
       buffer.writeln();
       _writeValidate(buffer, klass, override: false);
     }
@@ -538,7 +550,9 @@ class _SchemaEmitter {
     buffer.writeln('  const ${klass.name}();');
     buffer.writeln();
     if (options.emitValidationHelpers) {
-      buffer.writeln("  void validate({String pointer = ''});");
+      buffer.writeln(
+        "  void validate({String pointer = '', ValidationContext? context});",
+      );
       buffer.writeln();
     }
     buffer.writeln(
@@ -679,7 +693,11 @@ class _SchemaEmitter {
       discriminatorKey: union.discriminator?.propertyName,
       discriminatorValue: variant.discriminatorValue,
     );
-    if (_classNeedsValidation(klass, options)) {
+    final needsValidation = _classNeedsValidation(klass, options);
+    if (needsValidation) {
+      _validatedClassNames.add(klass.name);
+    }
+    if (options.emitValidationHelpers) {
       buffer.writeln();
       _writeValidate(buffer, klass, override: true);
     }
@@ -732,6 +750,20 @@ class _SchemaEmitter {
     for (final line in lines) {
       buffer.writeln('$indent/// ${line.trim()}');
     }
+  }
+
+  String? _defaultLiteralFor(IrProperty property) {
+    final value = property.defaultValue;
+    if (value == null) {
+      return null;
+    }
+    if (value is num || value is bool) {
+      return value.toString();
+    }
+    if (value is String) {
+      return _stringLiteral(value);
+    }
+    return null;
   }
 
   static String _stringLiteral(String value) {
@@ -815,8 +847,13 @@ class _SchemaEmitter {
 
     buffer.writeln('  const ${klass.name}({');
     for (final property in klass.properties) {
+      final defaultLiteral = !property.isRequired
+          ? _defaultLiteralFor(property)
+          : null;
       if (property.isRequired) {
         buffer.writeln('    required this.${property.fieldName},');
+      } else if (defaultLiteral != null) {
+        buffer.writeln('    this.${property.fieldName} = $defaultLiteral,');
       } else {
         buffer.writeln('    this.${property.fieldName},');
       }
@@ -862,9 +899,17 @@ class _SchemaEmitter {
       buffer.writeln('    final remaining = Map<String, dynamic>.from(json);');
     }
     for (final property in klass.properties) {
-      buffer.writeln(
-        '    final ${property.fieldName} = ${property.deserializeExpression('json')};',
-      );
+      final expression = property.deserializeExpression('json');
+      final defaultLiteral = !property.isRequired
+          ? _defaultLiteralFor(property)
+          : null;
+      if (defaultLiteral != null) {
+        buffer.writeln(
+          '    final ${property.fieldName} = ($expression) ?? $defaultLiteral;',
+        );
+      } else {
+        buffer.writeln('    final ${property.fieldName} = $expression;');
+      }
       buffer.writeln("    remaining.remove('${property.jsonName}');");
     }
     if (needsUnmatched) {
@@ -1105,18 +1150,31 @@ class _SchemaEmitter {
     IrClass klass, {
     required bool override,
   }) {
-    if (!_classNeedsValidation(klass, options)) {
+    final needsValidation = _classNeedsValidation(klass, options);
+    if (!needsValidation) {
+      if (!options.emitValidationHelpers) {
+        return;
+      }
       if (override) {
         buffer.writeln('  @override');
-        buffer.writeln("  void validate({String pointer = ''}) {}");
       }
+      buffer.writeln(
+        "  void validate({String pointer = '', ValidationContext? context}) {}",
+      );
       return;
     }
+
+    final propertyIndexByName = <String, int>{
+      for (var i = 0; i < klass.properties.length; i++)
+        klass.properties[i].jsonName: i,
+    };
 
     if (override) {
       buffer.writeln('  @override');
     }
-    buffer.writeln("  void validate({String pointer = ''}) {");
+    buffer.writeln(
+      "  void validate({String pointer = '', ValidationContext? context}) {",
+    );
 
     for (var index = 0; index < klass.properties.length; index++) {
       final property = klass.properties[index];
@@ -1124,42 +1182,211 @@ class _SchemaEmitter {
       final valueVar = '_value$index';
       final suffix = 'p$index';
       buffer.writeln(
-        "    final $pointerVar = _appendJsonPointer(pointer, '${property.jsonName}');",
+        "    final $pointerVar = appendJsonPointer(pointer, '${property.jsonName}');",
       );
       buffer.writeln('    final $valueVar = ${property.fieldName};');
+      final isFalseSchema = property.typeRef is FalseTypeRef;
+      if (property.title != null) {
+        buffer.writeln(
+          "    context?.annotate($pointerVar, 'title', ${_stringLiteral(property.title!)}, schemaPointer: ${_stringLiteral(property.schemaPointer)});",
+        );
+      }
+      if (property.defaultValue != null) {
+        final literal = _literalExpression(property.defaultValue);
+        buffer.writeln(
+          "    context?.annotate($pointerVar, 'default', $literal, schemaPointer: ${_stringLiteral(property.schemaPointer)});",
+        );
+      }
       if (!property.isRequired) {
-        buffer.writeln('    if ($valueVar != null) {');
-        _writeValidationBodyForProperty(
-          buffer,
-          property,
-          valueVar,
-          pointerVar,
-          indent: '      ',
-          suffix: suffix,
-        );
-        buffer.writeln('    }');
+        if (isFalseSchema) {
+          buffer.writeln('    if ($valueVar != null) {');
+          final message = _stringLiteral(
+            'Schema at ${property.schemaPointer} forbids property "${property.jsonName}".',
+          );
+          buffer.writeln(
+            '      throwValidationError($pointerVar, \'const\', $message);',
+          );
+          buffer.writeln('    }');
+        } else {
+          buffer.writeln('    if ($valueVar != null) {');
+          _writePropertyNameConstraint(
+            buffer,
+            klass,
+            _stringLiteral(property.jsonName),
+            pointerVar,
+            '      ',
+            suffix,
+          );
+          buffer.writeln(
+            "      context?.markProperty(pointer, '${property.jsonName}');",
+          );
+          _writeValidationBodyForProperty(
+            buffer,
+            property,
+            valueVar,
+            pointerVar,
+            indent: '      ',
+            suffix: suffix,
+          );
+          buffer.writeln('    }');
+        }
       } else {
-        _writeValidationBodyForProperty(
-          buffer,
-          property,
-          valueVar,
-          pointerVar,
-          indent: '    ',
-          suffix: suffix,
+        buffer.writeln(
+          "    context?.markProperty(pointer, '${property.jsonName}');",
         );
+        if (isFalseSchema) {
+          final message = _stringLiteral(
+            'Schema at ${property.schemaPointer} forbids property "${property.jsonName}".',
+          );
+          buffer.writeln(
+            '    throwValidationError($pointerVar, \'const\', $message);',
+          );
+        } else {
+          _writePropertyNameConstraint(
+            buffer,
+            klass,
+            _stringLiteral(property.jsonName),
+            pointerVar,
+            '    ',
+            suffix,
+          );
+          _writeValidationBodyForProperty(
+            buffer,
+            property,
+            valueVar,
+            pointerVar,
+            indent: '    ',
+            suffix: suffix,
+          );
+        }
+      }
+    }
+
+    if (klass.dependentRequired.isNotEmpty) {
+      for (final entry in klass.dependentRequired.entries) {
+        final triggerName = entry.key;
+        final triggerIndex = propertyIndexByName[triggerName];
+        if (triggerIndex == null) {
+          continue;
+        }
+        final triggerProperty = klass.properties[triggerIndex];
+        final triggerValueVar = '_value$triggerIndex';
+        final dependencies = <MapEntry<String, int>>[];
+        for (final candidate in entry.value) {
+          final depIndex = propertyIndexByName[candidate];
+          if (depIndex == null) {
+            continue;
+          }
+          final depProperty = klass.properties[depIndex];
+          if (depProperty.isRequired) {
+            continue;
+          }
+          dependencies.add(MapEntry(candidate, depIndex));
+        }
+        if (dependencies.isEmpty) {
+          continue;
+        }
+        if (!triggerProperty.isRequired) {
+          buffer.writeln('    if ($triggerValueVar != null) {');
+        }
+        for (final dependency in dependencies) {
+          final depIndex = dependency.value;
+          final depValueVar = '_value$depIndex';
+          final message = _stringLiteral(
+            'Property "${dependency.key}" must be present when "$triggerName" is defined.',
+          );
+          buffer.writeln('      if ($depValueVar == null) {');
+          buffer.writeln(
+            '        throwValidationError(pointer, \'dependentRequired\', $message);',
+          );
+          buffer.writeln('      }');
+        }
+        if (!triggerProperty.isRequired) {
+          buffer.writeln('    }');
+        }
+      }
+    }
+
+    if (klass.dependentSchemas.isNotEmpty) {
+      for (final entry in klass.dependentSchemas.entries) {
+        final triggerName = entry.key;
+        final constraint = entry.value;
+        final triggerIndex = propertyIndexByName[triggerName];
+        if (triggerIndex == null) {
+          continue;
+        }
+        final triggerProperty = klass.properties[triggerIndex];
+        final triggerValueVar = '_value$triggerIndex';
+        final triggerPointerVar = '_ptr$triggerIndex';
+        final guard = !triggerProperty.isRequired;
+        if (guard) {
+          buffer.writeln('    if ($triggerValueVar != null) {');
+        }
+        if (constraint.disallow) {
+          final message = _stringLiteral(
+            'Property "$triggerName" is not allowed in this context.',
+          );
+          buffer.writeln(
+            '      throwValidationError(pointer, \'dependentSchemas\', $message);',
+          );
+        } else if (constraint.typeRef != null) {
+          final typeRef = constraint.typeRef!;
+          if (typeRef is ObjectTypeRef) {
+            final spec = typeRef.spec;
+            final tempVar = '_dependent$triggerIndex';
+            final valueExpression = guard
+                ? '($triggerValueVar!).toJson()'
+                : '$triggerValueVar.toJson()';
+            buffer.writeln(
+              '      final $tempVar = ${spec.name}.fromJson($valueExpression);',
+            );
+            if (_classNeedsValidation(spec, options)) {
+              _validatedClassNames.add(spec.name);
+            }
+            buffer.writeln(
+              '      $tempVar.validate(pointer: $triggerPointerVar, context: context);',
+            );
+          } else {
+            final suffix = 'deps$triggerIndex';
+            final valueExpression = guard
+                ? '$triggerValueVar!'
+                : triggerValueVar;
+            _writeNestedValidation(
+              buffer,
+              typeRef,
+              valueExpression,
+              triggerPointerVar,
+              '      ',
+              suffix,
+            );
+          }
+        }
+        if (guard) {
+          buffer.writeln('    }');
+        }
       }
     }
 
     final additionalField = klass.additionalPropertiesField;
     if (additionalField != null &&
-        _typeRequiresValidation(additionalField.valueType)) {
+        (_typeRequiresValidation(additionalField.valueType, options) ||
+            (klass.propertyNamesConstraint?.hasRules ?? false))) {
       final mapVar = '_${additionalField.fieldName}Map';
       buffer.writeln('    final $mapVar = ${additionalField.fieldName};');
       buffer.writeln('    if ($mapVar != null) {');
       buffer.writeln('      $mapVar.forEach((key, value) {');
       buffer.writeln(
-        '        final itemPointer = _appendJsonPointer(pointer, key);',
+        '        final itemPointer = appendJsonPointer(pointer, key);',
       );
+      _writePropertyNameConstraint(
+        buffer,
+        klass,
+        'key',
+        'itemPointer',
+        '        ',
+        additionalField.fieldName,
+      );
+      buffer.writeln('        context?.markProperty(pointer, key);');
       _writeNestedValidation(
         buffer,
         additionalField.valueType,
@@ -1174,14 +1401,24 @@ class _SchemaEmitter {
 
     final patternField = klass.patternPropertiesField;
     if (patternField != null &&
-        _typeRequiresValidation(patternField.valueType)) {
+        (_typeRequiresValidation(patternField.valueType, options) ||
+            (klass.propertyNamesConstraint?.hasRules ?? false))) {
       final mapVar = '_${patternField.fieldName}Map';
       buffer.writeln('    final $mapVar = ${patternField.fieldName};');
       buffer.writeln('    if ($mapVar != null) {');
       buffer.writeln('      $mapVar.forEach((key, value) {');
       buffer.writeln(
-        '        final itemPointer = _appendJsonPointer(pointer, key);',
+        '        final itemPointer = appendJsonPointer(pointer, key);',
       );
+      _writePropertyNameConstraint(
+        buffer,
+        klass,
+        'key',
+        'itemPointer',
+        '        ',
+        patternField.fieldName,
+      );
+      buffer.writeln('        context?.markProperty(pointer, key);');
       _writeNestedValidation(
         buffer,
         patternField.valueType,
@@ -1196,14 +1433,24 @@ class _SchemaEmitter {
 
     final unevaluatedField = klass.unevaluatedPropertiesField;
     if (unevaluatedField != null &&
-        _typeRequiresValidation(unevaluatedField.valueType)) {
+        (_typeRequiresValidation(unevaluatedField.valueType, options) ||
+            (klass.propertyNamesConstraint?.hasRules ?? false))) {
       final mapVar = '_${unevaluatedField.fieldName}Map';
       buffer.writeln('    final $mapVar = ${unevaluatedField.fieldName};');
       buffer.writeln('    if ($mapVar != null) {');
       buffer.writeln('      $mapVar.forEach((key, value) {');
       buffer.writeln(
-        '        final itemPointer = _appendJsonPointer(pointer, key);',
+        '        final itemPointer = appendJsonPointer(pointer, key);',
       );
+      _writePropertyNameConstraint(
+        buffer,
+        klass,
+        'key',
+        'itemPointer',
+        '        ',
+        unevaluatedField.fieldName,
+      );
+      buffer.writeln('        context?.markProperty(pointer, key);');
       _writeNestedValidation(
         buffer,
         unevaluatedField.valueType,
@@ -1272,16 +1519,22 @@ class _SchemaEmitter {
   }) {
     if (rules.minLength != null && _isStringLike(property.typeRef)) {
       buffer.writeln('${indent}if ($valueVar.length < ${rules.minLength}) {');
+      final message = _stringLiteral(
+        'Expected at least ${rules.minLength} characters but found ',
+      );
       buffer.writeln(
-        '$indent  _throwValidationError($pointerVar, "minLength", "Expected at least ${rules.minLength} characters but found " + $valueVar.length.toString() + ".");',
+        '$indent  throwValidationError($pointerVar, \'minLength\', $message + $valueVar.length.toString() + \'.\');',
       );
       buffer.writeln('$indent}');
     }
 
     if (rules.maxLength != null && _isStringLike(property.typeRef)) {
       buffer.writeln('${indent}if ($valueVar.length > ${rules.maxLength}) {');
+      final message = _stringLiteral(
+        'Expected at most ${rules.maxLength} characters but found ',
+      );
       buffer.writeln(
-        '$indent  _throwValidationError($pointerVar, "maxLength", "Expected at most ${rules.maxLength} characters but found " + $valueVar.length.toString() + ".");',
+        '$indent  throwValidationError($pointerVar, \'maxLength\', $message + $valueVar.length.toString() + \'.\');',
       );
       buffer.writeln('$indent}');
     }
@@ -1290,8 +1543,11 @@ class _SchemaEmitter {
       final comparison = rules.exclusiveMinimum ? '<=' : '<';
       final keywordComparison = rules.exclusiveMinimum ? '>' : '>=';
       buffer.writeln('${indent}if ($valueVar $comparison ${rules.minimum}) {');
+      final message = _stringLiteral(
+        'Expected value $keywordComparison ${rules.minimum} but found ',
+      );
       buffer.writeln(
-        '$indent  _throwValidationError($pointerVar, "minimum", "Expected value $keywordComparison ${rules.minimum} but found " + $valueVar.toString() + ".");',
+        '$indent  throwValidationError($pointerVar, \'minimum\', $message + $valueVar.toString() + \'.\');',
       );
       buffer.writeln('$indent}');
     }
@@ -1300,8 +1556,11 @@ class _SchemaEmitter {
       final comparison = rules.exclusiveMaximum ? '>=' : '>';
       final keywordComparison = rules.exclusiveMaximum ? '<' : '<=';
       buffer.writeln('${indent}if ($valueVar $comparison ${rules.maximum}) {');
+      final message = _stringLiteral(
+        'Expected value $keywordComparison ${rules.maximum} but found ',
+      );
       buffer.writeln(
-        '$indent  _throwValidationError($pointerVar, "maximum", "Expected value $keywordComparison ${rules.maximum} but found " + $valueVar.toString() + ".");',
+        '$indent  throwValidationError($pointerVar, \'maximum\', $message + $valueVar.toString() + \'.\');',
       );
       buffer.writeln('$indent}');
     }
@@ -1312,8 +1571,11 @@ class _SchemaEmitter {
         '${indent}final $patternVar = RegExp(${_stringLiteral(rules.pattern!)});',
       );
       buffer.writeln('${indent}if (!$patternVar.hasMatch($valueVar)) {');
+      final messagePrefix = _stringLiteral(
+        'Expected value to match pattern ${rules.pattern} but found ',
+      );
       buffer.writeln(
-        '$indent  _throwValidationError($pointerVar, "pattern", "Expected value to match pattern ${rules.pattern} but found " + $valueVar + ".");',
+        '$indent  throwValidationError($pointerVar, \'pattern\', $messagePrefix + $valueVar + \'.\');',
       );
       buffer.writeln('$indent}');
     }
@@ -1325,11 +1587,97 @@ class _SchemaEmitter {
         final expectedLiteral = _literalExpression(rules.constValue);
         buffer.writeln('${indent}final $actualVar = $actualExpr;');
         buffer.writeln('${indent}if ($actualVar != $expectedLiteral) {');
+        final message = _stringLiteral(
+          'Expected value equal to $expectedLiteral but found ',
+        );
         buffer.writeln(
-          '$indent  _throwValidationError($pointerVar, "const", "Expected value equal to $expectedLiteral but found " + $actualVar.toString() + ".");',
+          '$indent  throwValidationError($pointerVar, \'const\', $message + $actualVar.toString() + \'.\');',
         );
         buffer.writeln('$indent}');
       }
+    }
+  }
+
+  void _writePropertyNameConstraint(
+    StringBuffer buffer,
+    IrClass klass,
+    String nameExpression,
+    String pointerExpression,
+    String indent,
+    String suffix,
+  ) {
+    final constraint = klass.propertyNamesConstraint;
+    if (constraint == null || !constraint.hasRules) {
+      return;
+    }
+
+    if (constraint.disallow) {
+      final prefix = _stringLiteral('Property name "');
+      final suffixMessage = _stringLiteral(
+        '" is not allowed by schema at ${constraint.schemaPointer}.',
+      );
+      buffer.writeln(
+        '$indent throwValidationError($pointerExpression, \'propertyNames\', $prefix + $nameExpression + $suffixMessage);',
+      );
+      return;
+    }
+
+    final rules = constraint.validation;
+    if (rules == null) {
+      return;
+    }
+
+    if (rules.minLength != null) {
+      final message = _stringLiteral(
+        'Property name must be at least ${rules.minLength} characters long (schema ${constraint.schemaPointer}).',
+      );
+      buffer.writeln(
+        '$indent if ($nameExpression.length < ${rules.minLength}) {',
+      );
+      buffer.writeln(
+        '$indent   throwValidationError($pointerExpression, \'propertyNames\', $message);',
+      );
+      buffer.writeln('$indent }');
+    }
+
+    if (rules.maxLength != null) {
+      final message = _stringLiteral(
+        'Property name must be at most ${rules.maxLength} characters long (schema ${constraint.schemaPointer}).',
+      );
+      buffer.writeln(
+        '$indent if ($nameExpression.length > ${rules.maxLength}) {',
+      );
+      buffer.writeln(
+        '$indent   throwValidationError($pointerExpression, \'propertyNames\', $message);',
+      );
+      buffer.writeln('$indent }');
+    }
+
+    if (rules.pattern != null) {
+      final patternVar = '_propertyNamePattern$suffix';
+      buffer.writeln(
+        '$indent final $patternVar = RegExp(${_stringLiteral(rules.pattern!)});',
+      );
+      final message = _stringLiteral(
+        'Property name must match pattern ${rules.pattern} (schema ${constraint.schemaPointer}).',
+      );
+      buffer.writeln('$indent if (!$patternVar.hasMatch($nameExpression)) {');
+      buffer.writeln(
+        '$indent   throwValidationError($pointerExpression, \'propertyNames\', $message);',
+      );
+      buffer.writeln('$indent }');
+    }
+
+    if (rules.constValue != null) {
+      final literal = _literalExpression(rules.constValue);
+      final message = _stringLiteral(
+        'Property name must equal $literal (schema ${constraint.schemaPointer}).',
+      );
+      buffer.writeln('$indent if ($nameExpression != $literal) {');
+      buffer.writeln(
+        '$indent   throwValidationError($pointerExpression, \'propertyNames\', $message);',
+      );
+      buffer.writeln('$indent }');
     }
   }
 
@@ -1341,10 +1689,26 @@ class _SchemaEmitter {
     String indent,
     String suffix,
   ) {
-    if (ref is ObjectTypeRef) {
-      buffer.writeln(
-        '$indent$valueExpression.validate(pointer: $pointerExpression);',
+    if (!_typeRequiresValidation(ref, options)) {
+      return;
+    }
+    if (ref is FalseTypeRef) {
+      final message = _stringLiteral(
+        'Schema forbids any value at this location.',
       );
+      buffer.writeln(
+        '${indent}throwValidationError($pointerExpression, \'const\', $message);',
+      );
+      return;
+    }
+    if (ref is ObjectTypeRef) {
+      if (_validatedClassNames.contains(ref.spec.name) ||
+          _classNeedsValidation(ref.spec, options)) {
+        _validatedClassNames.add(ref.spec.name);
+        buffer.writeln(
+          '$indent$valueExpression.validate(pointer: $pointerExpression, context: context);',
+        );
+      }
       return;
     }
     if (ref is ListTypeRef) {
@@ -1362,7 +1726,7 @@ class _SchemaEmitter {
           'if ($lengthVar > $index) {',
         );
         buffer.writeln(
-          "$indent  final itemPointer = _appendJsonPointer($pointerExpression, '$index');",
+          "$indent  final itemPointer = appendJsonPointer($pointerExpression, '$index');",
         );
         buffer.writeln('$indent  final item = $valueExpression[$index];');
         _writeNestedValidation(
@@ -1374,6 +1738,9 @@ class _SchemaEmitter {
           '${suffix}p$index',
         );
         buffer.writeln('$indent  $evaluatedVar[$index] = true;');
+        buffer.writeln(
+          '$indent  context?.markItem($pointerExpression, $index);',
+        );
         buffer.writeln('$indent}');
       }
 
@@ -1387,7 +1754,7 @@ class _SchemaEmitter {
           'if ($lengthVar > $additionalStart) {',
         );
         buffer.writeln(
-          '$indent  _throwValidationError($pointerExpression, "items", ${_stringLiteral(message)});',
+          '$indent  throwValidationError($pointerExpression, \'items\', ${_stringLiteral(message)});',
         );
         buffer.writeln('$indent}');
       } else {
@@ -1396,7 +1763,7 @@ class _SchemaEmitter {
           'for (var i = $additionalStart; i < $lengthVar; i++) {',
         );
         buffer.writeln(
-          '$indent  final itemPointer = _appendJsonPointer($pointerExpression, i.toString());',
+          '$indent  final itemPointer = appendJsonPointer($pointerExpression, i.toString());',
         );
         buffer.writeln('$indent  final item = $valueExpression[i];');
         _writeNestedValidation(
@@ -1409,6 +1776,7 @@ class _SchemaEmitter {
         );
         if (ref.itemsEvaluatesAdditionalItems) {
           buffer.writeln('$indent  $evaluatedVar[i] = true;');
+          buffer.writeln('$indent  context?.markItem($pointerExpression, i);');
         }
         buffer.writeln('$indent}');
       }
@@ -1419,49 +1787,56 @@ class _SchemaEmitter {
         final minContains =
             ref.minContains ?? (ref.containsType != null ? 1 : null);
         final maxContains = ref.maxContains;
-        buffer.writeln('${indent}var $containsCountVar = 0;');
-        buffer.writeln('${indent}for (var i = 0; i < $lengthVar; i++) {');
+        buffer.writeln('$indent'
+            'var $containsCountVar = 0;');
+        buffer.writeln('$indent'
+            'for (var i = 0; i < $lengthVar; i++) {');
         buffer.writeln(
-          '${indent}  final itemPointer = _appendJsonPointer($pointerExpression, i.toString());',
+          '$indent  final itemPointer = appendJsonPointer($pointerExpression, i.toString());',
         );
-        buffer.writeln('${indent}  final item = $valueExpression[i];');
+        buffer.writeln('$indent  final item = $valueExpression[i];');
         if (containsType is ObjectTypeRef &&
             _classNeedsValidation(containsType.spec, options)) {
           final klass = containsType.spec;
-          buffer.writeln('${indent}  var matches = item is ${klass.name};');
-          buffer.writeln('${indent}  if (matches) {');
-          buffer.writeln('${indent}    try {');
+          buffer.writeln('$indent  var matches = item is ${klass.name};');
+          buffer.writeln('$indent  if (matches) {');
+          buffer.writeln('$indent    try {');
           buffer.writeln(
-            '${indent}      (item as ${klass.name}).validate(pointer: itemPointer);',
+            '$indent      (item as ${klass.name}).validate(pointer: itemPointer, context: context);',
           );
-          buffer.writeln('${indent}    } on ValidationError {');
-          buffer.writeln('${indent}      matches = false;');
-          buffer.writeln('${indent}    }');
-          buffer.writeln('${indent}  }');
+          buffer.writeln('$indent    } on ValidationError {');
+          buffer.writeln('$indent      matches = false;');
+          buffer.writeln('$indent    }');
+          buffer.writeln('$indent  }');
         } else {
           final matchCondition = _containsMatchCondition(containsType, 'item');
-          buffer.writeln('${indent}  final matches = $matchCondition;');
+          buffer.writeln('$indent  final matches = $matchCondition;');
         }
-        buffer.writeln('${indent}  if (matches) {');
-        buffer.writeln('${indent}    $containsCountVar++;');
+        buffer.writeln('$indent  if (matches) {');
+        buffer.writeln('$indent    $containsCountVar++;');
         buffer.writeln(
-          '${indent}    if (!$evaluatedVar[i]) { $evaluatedVar[i] = true; }',
+          '$indent    if (!$evaluatedVar[i]) { $evaluatedVar[i] = true; }',
         );
-        buffer.writeln('${indent}  }');
-        buffer.writeln('${indent}}');
+        buffer.writeln(
+          '$indent    context?.markItem($pointerExpression, i);',
+        );
+        buffer.writeln('$indent  }');
+        buffer.writeln('$indent}');
         if (minContains != null) {
-          buffer.writeln('${indent}if ($containsCountVar < $minContains) {');
+          buffer.writeln('$indent'
+              'if ($containsCountVar < $minContains) {');
           buffer.writeln(
-            '$indent  _throwValidationError($pointerExpression, "contains", "Expected at least $minContains item(s) matching \\"contains\\" but found " + $containsCountVar.toString() + ".");',
+            '$indent  throwValidationError($pointerExpression, \'contains\', ${_stringLiteral('Expected at least $minContains item(s) matching "contains" but found ')} + $containsCountVar.toString() + \'.\');',
           );
-          buffer.writeln('${indent}}');
+          buffer.writeln('$indent}');
         }
         if (maxContains != null) {
-          buffer.writeln('${indent}if ($containsCountVar > $maxContains) {');
+          buffer.writeln('$indent'
+              'if ($containsCountVar > $maxContains) {');
           buffer.writeln(
-            '$indent  _throwValidationError($pointerExpression, "contains", "Expected at most $maxContains item(s) matching \\"contains\\" but found " + $containsCountVar.toString() + ".");',
+            '$indent  throwValidationError($pointerExpression, \'contains\', ${_stringLiteral('Expected at most $maxContains item(s) matching "contains" but found ')} + $containsCountVar.toString() + \'.\');',
           );
-          buffer.writeln('${indent}}');
+          buffer.writeln('$indent}');
         }
       }
 
@@ -1474,7 +1849,7 @@ class _SchemaEmitter {
         final unevaluatedType = ref.unevaluatedItemsType;
         if (unevaluatedType != null) {
           buffer.writeln(
-            '$indent    final itemPointer = _appendJsonPointer($pointerExpression, i.toString());',
+            '$indent    final itemPointer = appendJsonPointer($pointerExpression, i.toString());',
           );
           buffer.writeln('$indent    final item = $valueExpression[i];');
           _writeNestedValidation(
@@ -1487,13 +1862,16 @@ class _SchemaEmitter {
                 'u',
           );
           buffer.writeln('$indent    $evaluatedVar[i] = true;');
+          buffer.writeln(
+            '$indent    context?.markItem($pointerExpression, i);',
+          );
           if (ref.disallowUnevaluatedItems) {
             buffer.writeln('$indent    continue;');
           }
         }
         if (ref.disallowUnevaluatedItems) {
           buffer.writeln(
-            '$indent    _throwValidationError($pointerExpression, "unevaluatedItems", "Unexpected unevaluated item at index \$i.");',
+            '$indent    throwValidationError($pointerExpression, \'unevaluatedItems\', ${_stringLiteral('Unexpected unevaluated item at index ')} + i.toString() + \'.\');',
           );
         }
         buffer.writeln('$indent  }');
@@ -1564,7 +1942,7 @@ class _SchemaEmitter {
           'Expected exactly one of the combinations defined at ${constraint.schemaPointer} to be satisfied ($combinationsDescription).';
       buffer.writeln('$indent if ($countVar != 1) {');
       buffer.writeln(
-        '$indent   _throwValidationError(pointer, ${_stringLiteral(constraint.keyword)}, ${_stringLiteral(message)});',
+        '$indent   throwValidationError(pointer, ${_stringLiteral(constraint.keyword)}, ${_stringLiteral(message)});',
       );
       buffer.writeln('$indent }');
     } else {
@@ -1572,7 +1950,7 @@ class _SchemaEmitter {
           'Expected at least one of the combinations defined at ${constraint.schemaPointer} to be satisfied ($combinationsDescription).';
       buffer.writeln('$indent if (!$matchesVar.any((value) => value)) {');
       buffer.writeln(
-        '$indent   _throwValidationError(pointer, ${_stringLiteral(constraint.keyword)}, ${_stringLiteral(message)});',
+        '$indent   throwValidationError(pointer, ${_stringLiteral(constraint.keyword)}, ${_stringLiteral(message)});',
       );
       buffer.writeln('$indent }');
     }
@@ -1610,60 +1988,96 @@ class _SchemaEmitter {
   }
 }
 
-bool _classNeedsValidation(IrClass klass, SchemaGeneratorOptions options) {
+bool _classNeedsValidation(
+  IrClass klass,
+  SchemaGeneratorOptions options, [
+  Set<IrClass>? stack,
+]) {
   if (!options.emitValidationHelpers) {
     return false;
   }
 
+  stack ??= <IrClass>{};
+  if (!stack.add(klass)) {
+    // Cyclic reference already inspected higher in the stack.
+    return false;
+  }
+
+  final propertyNames = klass.propertyNamesConstraint;
+  if (propertyNames != null && propertyNames.hasRules) {
+    stack.remove(klass);
+    return true;
+  }
+
   if (klass.conditionalConstraints.isNotEmpty) {
+    stack.remove(klass);
+    return true;
+  }
+
+  if (klass.dependentRequired.isNotEmpty || klass.dependentSchemas.isNotEmpty) {
+    stack.remove(klass);
     return true;
   }
 
   for (final property in klass.properties) {
     if (property.validation?.hasRules == true) {
+      stack.remove(klass);
       return true;
     }
-    if (_typeRequiresValidation(property.typeRef)) {
+    if (_typeRequiresValidation(property.typeRef, options, stack)) {
+      stack.remove(klass);
       return true;
     }
   }
 
   final additionalField = klass.additionalPropertiesField;
   if (additionalField != null &&
-      _typeRequiresValidation(additionalField.valueType)) {
+      _typeRequiresValidation(additionalField.valueType, options, stack)) {
+    stack.remove(klass);
     return true;
   }
 
   final patternField = klass.patternPropertiesField;
-  if (patternField != null && _typeRequiresValidation(patternField.valueType)) {
+  if (patternField != null &&
+      _typeRequiresValidation(patternField.valueType, options, stack)) {
+    stack.remove(klass);
     return true;
   }
 
   final unevaluatedField = klass.unevaluatedPropertiesField;
   if (unevaluatedField != null &&
-      _typeRequiresValidation(unevaluatedField.valueType)) {
+      _typeRequiresValidation(unevaluatedField.valueType, options, stack)) {
+    stack.remove(klass);
     return true;
   }
 
+  stack.remove(klass);
   return false;
 }
 
-bool _typeRequiresValidation(TypeRef ref) {
-  if (ref is ObjectTypeRef) {
+bool _typeRequiresValidation(
+  TypeRef ref,
+  SchemaGeneratorOptions options, [
+  Set<IrClass>? stack,
+]) {
+  if (ref is FalseTypeRef) {
     return true;
   }
+  if (ref is ObjectTypeRef) {
+    return _classNeedsValidation(ref.spec, options, stack);
+  }
   if (ref is ListTypeRef) {
-    if (_typeRequiresValidation(ref.itemType)) {
+    if (_typeRequiresValidation(ref.itemType, options, stack)) {
       return true;
     }
     for (final type in ref.prefixItemTypes) {
-      if (_typeRequiresValidation(type)) {
+      if (_typeRequiresValidation(type, options, stack)) {
         return true;
       }
     }
     final containsType = ref.containsType;
     if (containsType != null &&
-        _typeRequiresValidation(containsType)) {
+        _typeRequiresValidation(containsType, options, stack)) {
       return true;
     }
     if (containsType != null) {
@@ -1671,7 +2085,7 @@ bool _typeRequiresValidation(TypeRef ref) {
     }
     final unevaluatedItemsType = ref.unevaluatedItemsType;
     if (unevaluatedItemsType != null &&
-        _typeRequiresValidation(unevaluatedItemsType)) {
+        _typeRequiresValidation(unevaluatedItemsType, options, stack)) {
       return true;
     }
     return false;

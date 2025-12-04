@@ -1,4 +1,4 @@
-part of 'package:schemamodeschema/src/generator.dart';
+part of 'package:schema2model/src/generator.dart';
 
 /// Walks a JSON Schema graph and produces an intermediate representation that
 /// downstream emitters can translate into Dart source.
@@ -221,6 +221,7 @@ class _SchemaWalker {
           fieldName: 'value',
           typeRef: ref,
           isRequired: true,
+          schemaPointer: _pointerChild(location.pointer, 'value'),
           description: null,
         ),
       ],
@@ -229,6 +230,8 @@ class _SchemaWalker {
         thenSchema: _rootSchema['then'] as Map<String, dynamic>?,
         elseSchema: _rootSchema['else'] as Map<String, dynamic>?,
       ),
+      dependentRequired: <String, Set<String>>{},
+      dependentSchemas: <String, DependentSchemaConstraint>{},
     );
     _classByLocation[_SchemaCacheKey(location.uri, location.pointer)] = klass;
     _classes[fallbackName] = klass;
@@ -252,7 +255,7 @@ class _SchemaWalker {
   }
 
   TypeRef _resolveSchema(
-    Map<String, dynamic>? schema,
+    Object? schema,
     _SchemaLocation location, {
     String? suggestedClassName,
     SchemaDialect? dialect,
@@ -281,6 +284,19 @@ class _SchemaWalker {
       const ref = DynamicTypeRef();
       _typeCache[cacheKey] = ref;
       return ref;
+    }
+
+    if (schema is bool) {
+      final ref = schema ? const DynamicTypeRef() : const FalseTypeRef();
+      _typeCache[cacheKey] = ref;
+      return ref;
+    }
+
+    if (schema is! Map<String, dynamic>) {
+      _schemaError(
+        'Expected schema to be an object or boolean, got ${schema.runtimeType}.',
+        location,
+      );
     }
 
     final anchorValue = schema[r'$anchor'];
@@ -486,6 +502,8 @@ class _SchemaWalker {
               thenSchema: workingSchema['then'] as Map<String, dynamic>?,
               elseSchema: workingSchema['else'] as Map<String, dynamic>?,
             ),
+            dependentRequired: <String, Set<String>>{},
+            dependentSchemas: <String, DependentSchemaConstraint>{},
           );
           final locationKey = _SchemaCacheKey(location.uri, location.pointer);
           _classByLocation[locationKey] = objSpec;
@@ -582,13 +600,15 @@ class _SchemaWalker {
         var itemsEvaluatesAdditionalItems = false;
         TypeRef itemType = const DynamicTypeRef();
         if (items is Map<String, dynamic>) {
+          String? itemClassName;
+          if (suggestedClassName != null) {
+            itemClassName = _elementClassName(suggestedClassName);
+          }
           final itemPointer = _pointerChild(location.pointer, 'items');
           itemType = _resolveSchema(
             items,
             _SchemaLocation(uri: location.uri, pointer: itemPointer),
-            suggestedClassName: suggestedClassName != null
-                ? '${suggestedClassName}Item'
-                : null,
+            suggestedClassName: itemClassName,
             dialect: activeDialect,
           );
           itemsEvaluatesAdditionalItems = true;
@@ -632,11 +652,15 @@ class _SchemaWalker {
         final containsRaw = workingSchema['contains'];
         final containsPointer = _pointerChild(location.pointer, 'contains');
         if (containsRaw is Map<String, dynamic>) {
+          String? containsClassName;
+          if (suggestedClassName != null) {
+            containsClassName = _elementClassName(suggestedClassName);
+          }
           containsType = _resolveSchema(
             containsRaw,
             _SchemaLocation(uri: location.uri, pointer: containsPointer),
             suggestedClassName: suggestedClassName != null
-                ? '${suggestedClassName}Contains'
+                ? containsClassName
                 : null,
             dialect: activeDialect,
           );
@@ -708,7 +732,9 @@ class _SchemaWalker {
         }
 
         final ref = ListTypeRef(
-          itemType: itemType,
+          itemType: itemType is DynamicTypeRef && containsType != null
+              ? containsType
+              : itemType,
           prefixItemTypes: prefixItemTypes,
           containsType: containsType,
           minContains: minContains,
@@ -842,6 +868,8 @@ class _SchemaWalker {
           thenSchema: schema['then'] as Map<String, dynamic>?,
           elseSchema: schema['else'] as Map<String, dynamic>?,
         ),
+        dependentRequired: <String, Set<String>>{},
+        dependentSchemas: <String, DependentSchemaConstraint>{},
       );
       return unionClass;
     });
@@ -1415,7 +1443,7 @@ class _SchemaWalker {
 
         final suggestedName = '${spec.name}_$key';
         final propertyType = _resolveSchema(
-          propertyMap,
+          propertySchema,
           _SchemaLocation(uri: location.uri, pointer: propertyPointer),
           suggestedClassName: suggestedName,
           dialect: dialect,
@@ -1429,6 +1457,7 @@ class _SchemaWalker {
 
         final format = propertyMap?['format'] as String?;
         final hint = _lookupFormatHint(format);
+        final formatInfo = format != null ? _formatRegistry[format] : null;
         final deprecated = propertyMap?['deprecated'] == true;
         final defaultValue = propertyMap?['default'];
         final examples = propertyMap?['examples'] is List
@@ -1437,7 +1466,8 @@ class _SchemaWalker {
         final description = _composePropertyDescription(
           description: propertyMap?['description'] as String?,
           format: format,
-          recognizedFormat: hint != null,
+          formatInfo: formatInfo,
+          hintAvailable: hint != null,
           convertedFormat: propertyType is FormatTypeRef,
           deprecated: deprecated,
           defaultValue: defaultValue,
@@ -1450,7 +1480,9 @@ class _SchemaWalker {
           fieldName: fieldName,
           typeRef: propertyType,
           isRequired: isRequired,
+          schemaPointer: propertyPointer,
           description: description,
+          title: propertyMap?['title'] as String?,
           format: format,
           validation: validation,
           isDeprecated: deprecated,
@@ -1459,6 +1491,95 @@ class _SchemaWalker {
         );
         spec.properties.add(prop);
       }
+    }
+
+    spec.dependentRequired.clear();
+    final dependentRequiredRaw = schema['dependentRequired'];
+    if (dependentRequiredRaw is Map) {
+      for (final entry in dependentRequiredRaw.entries) {
+        final key = entry.key;
+        final value = entry.value;
+        if (key is! String) {
+          continue;
+        }
+        if (value is List) {
+          final set = value.whereType<String>().toSet();
+          if (set.isNotEmpty) {
+            spec.dependentRequired[key] = set;
+          }
+        } else {
+          final pointer = _pointerChild(
+            _pointerChild(location.pointer, 'dependentRequired'),
+            key,
+          );
+          _schemaError(
+            'Expected dependentRequired entries to be arrays of strings',
+            _SchemaLocation(uri: location.uri, pointer: pointer),
+          );
+        }
+      }
+    } else if (dependentRequiredRaw != null) {
+      _schemaError(
+        'Expected "dependentRequired" to be an object',
+        _SchemaLocation(
+          uri: location.uri,
+          pointer: _pointerChild(location.pointer, 'dependentRequired'),
+        ),
+      );
+    }
+
+    spec.dependentSchemas.clear();
+    final dependentSchemasRaw = schema['dependentSchemas'];
+    if (dependentSchemasRaw is Map) {
+      for (final entry in dependentSchemasRaw.entries) {
+        final key = entry.key;
+        final value = entry.value;
+        if (key is! String) {
+          continue;
+        }
+        final schemaPointer = _pointerChild(
+          _pointerChild(location.pointer, 'dependentSchemas'),
+          key,
+        );
+        if (value == true) {
+          continue;
+        }
+        if (value == false) {
+          spec.dependentSchemas[key] = DependentSchemaConstraint(
+            property: key,
+            schemaPointer: schemaPointer,
+            disallow: true,
+          );
+          continue;
+        }
+        if (value is Map<String, dynamic>) {
+          final typeRef = _resolveSchema(
+            value,
+            _SchemaLocation(uri: location.uri, pointer: schemaPointer),
+            suggestedClassName:
+                '${spec.name}${_Naming.className(key)}Dependency',
+            dialect: dialect,
+          );
+          spec.dependentSchemas[key] = DependentSchemaConstraint(
+            property: key,
+            schemaPointer: schemaPointer,
+            typeRef: typeRef,
+          );
+          continue;
+        }
+        _schemaError(
+          'Expected dependentSchemas entries to be boolean or schema objects',
+          _SchemaLocation(uri: location.uri, pointer: schemaPointer),
+        );
+      }
+    } else if (dependentSchemasRaw != null) {
+      _schemaError(
+        'Expected "dependentSchemas" to be an object',
+        _SchemaLocation(
+          uri: location.uri,
+          pointer: _pointerChild(location.pointer, 'dependentSchemas'),
+        ),
+      );
     }
 
     spec.additionalPropertiesField = _buildAdditionalPropertiesField(
@@ -1486,6 +1607,14 @@ class _SchemaWalker {
       dialect,
       usedFieldNames,
     );
+
+    final propertyNamesConstraint = _buildPropertyNamesConstraint(
+      schema,
+      location,
+    );
+    if (propertyNamesConstraint != null) {
+      spec.propertyNamesConstraint = propertyNamesConstraint;
+    }
   }
 
   String _allocateClassName(String candidate) {
@@ -1804,6 +1933,41 @@ class _SchemaWalker {
     );
   }
 
+  IrPropertyNamesConstraint? _buildPropertyNamesConstraint(
+    Map<String, dynamic> schema,
+    _SchemaLocation location,
+  ) {
+    final node = schema['propertyNames'];
+    if (node == null) {
+      return null;
+    }
+    final pointer = _pointerChild(location.pointer, 'propertyNames');
+    if (node is bool) {
+      if (!node) {
+        return IrPropertyNamesConstraint(
+          schemaPointer: pointer,
+          validation: null,
+          disallow: true,
+        );
+      }
+      return null;
+    }
+    if (node is Map<String, dynamic>) {
+      final rules = _extractValidationRules(node);
+      if (rules == null || !rules.hasRules) {
+        return null;
+      }
+      return IrPropertyNamesConstraint(
+        schemaPointer: pointer,
+        validation: rules,
+      );
+    }
+    _schemaError(
+      'Expected "propertyNames" to be a boolean or schema object',
+      _SchemaLocation(uri: location.uri, pointer: pointer),
+    );
+  }
+
   PropertyValidationRules? _extractValidationRules(
     Map<String, dynamic>? schema,
   ) {
@@ -1909,7 +2073,8 @@ class _SchemaWalker {
   String? _composePropertyDescription({
     String? description,
     String? format,
-    required bool recognizedFormat,
+    _FormatInfo? formatInfo,
+    required bool hintAvailable,
     required bool convertedFormat,
     required bool deprecated,
     Object? defaultValue,
@@ -1935,17 +2100,33 @@ class _SchemaWalker {
     }
 
     if (format != null && format.trim().isNotEmpty) {
+      final normalizedFormat = format.trim();
+      final recognizedFormat = formatInfo != null || hintAvailable;
       if (!recognizedFormat) {
         sections.add(
-          'Format: $format (unsupported format, emitted as String).',
+          'Format: $normalizedFormat (unsupported format, emitted as String).',
         );
-      } else if (!convertedFormat) {
-        final reason = _options.enableFormatHints
-            ? 'conversion not applied'
-            : 'format hints disabled';
-        sections.add('Format: $format ($reason).');
       } else {
-        sections.add('Format: $format.');
+        String reasonSuffix = '';
+        if (!convertedFormat) {
+          final reason = !_options.enableFormatHints && hintAvailable
+              ? 'format hints disabled'
+              : hintAvailable
+              ? 'conversion not applied'
+              : 'no type mapping available';
+          reasonSuffix = ' ($reason)';
+        }
+        sections.add('Format: $normalizedFormat$reasonSuffix.');
+        if (formatInfo?.description != null &&
+            formatInfo!.description.trim().isNotEmpty) {
+          final desc = formatInfo.description.trim();
+          sections.add(desc.endsWith('.') ? desc : '$desc.');
+        }
+        if (formatInfo?.definition != null &&
+            formatInfo!.definition!.trim().isNotEmpty) {
+          final uri = formatInfo.definition!.trim();
+          sections.add('See $uri.');
+        }
       }
     }
 
@@ -2303,6 +2484,13 @@ class _FormatHint {
   final IrHelper? helper;
 }
 
+class _FormatInfo {
+  const _FormatInfo({required this.description, this.definition});
+
+  final String description;
+  final String? definition;
+}
+
 const IrHelper _emailAddressHelper = IrHelper(
   name: 'EmailAddress',
   code: '''
@@ -2353,6 +2541,106 @@ class UuidValue {
 ''',
 );
 
+const IrHelper _hostnameHelper = IrHelper(
+  name: 'Hostname',
+  code: '''
+/// Value type representing a hostname.
+/// Generated because the originating schema used `format: hostname`.
+class Hostname {
+  const Hostname(this.value);
+
+  final String value;
+
+  String toJson() => value;
+
+  @override
+  String toString() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is Hostname && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+''',
+);
+
+const IrHelper _ipv4AddressHelper = IrHelper(
+  name: 'Ipv4Address',
+  code: '''
+/// Value type representing an IPv4 address.
+/// Generated because the originating schema used `format: ipv4`.
+class Ipv4Address {
+  const Ipv4Address(this.value);
+
+  final String value;
+
+  String toJson() => value;
+
+  @override
+  String toString() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is Ipv4Address && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+''',
+);
+
+const IrHelper _ipv6AddressHelper = IrHelper(
+  name: 'Ipv6Address',
+  code: '''
+/// Value type representing an IPv6 address.
+/// Generated because the originating schema used `format: ipv6`.
+class Ipv6Address {
+  const Ipv6Address(this.value);
+
+  final String value;
+
+  String toJson() => value;
+
+  @override
+  String toString() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is Ipv6Address && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+''',
+);
+
+const IrHelper _uriReferenceHelper = IrHelper(
+  name: 'UriReference',
+  code: '''
+/// Value type representing a URI reference.
+/// Generated because the originating schema used `format: uri-reference`.
+class UriReference {
+  const UriReference(this.value);
+
+  final Uri value;
+
+  String toJson() => value.toString();
+
+  @override
+  String toString() => value.toString();
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is UriReference && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+''',
+);
+
 final Map<String, _FormatHint> _formatHintTable = <String, _FormatHint>{
   'date-time': _FormatHint(
     name: 'date-time',
@@ -2360,11 +2648,24 @@ final Map<String, _FormatHint> _formatHintTable = <String, _FormatHint>{
     deserialize: (source) => 'DateTime.parse($source)',
     serialize: (value) => '$value.toIso8601String()',
   ),
+  'date': _FormatHint(
+    name: 'date',
+    typeName: 'DateTime',
+    deserialize: (source) => 'DateTime.parse($source)',
+    serialize: (value) => '$value.toIso8601String().split(\'T\').first',
+  ),
   'uri': _FormatHint(
     name: 'uri',
     typeName: 'Uri',
     deserialize: (source) => 'Uri.parse($source)',
     serialize: (value) => '$value.toString()',
+  ),
+  'uri-reference': _FormatHint(
+    name: 'uri-reference',
+    typeName: 'UriReference',
+    deserialize: (source) => 'UriReference(Uri.parse($source))',
+    serialize: (value) => '$value.toJson()',
+    helper: _uriReferenceHelper,
   ),
   'email': _FormatHint(
     name: 'email',
@@ -2380,19 +2681,187 @@ final Map<String, _FormatHint> _formatHintTable = <String, _FormatHint>{
     serialize: (value) => '$value.toJson()',
     helper: _uuidValueHelper,
   ),
+  'hostname': _FormatHint(
+    name: 'hostname',
+    typeName: 'Hostname',
+    deserialize: (source) => 'Hostname($source)',
+    serialize: (value) => '$value.toJson()',
+    helper: _hostnameHelper,
+  ),
+  'ipv4': _FormatHint(
+    name: 'ipv4',
+    typeName: 'Ipv4Address',
+    deserialize: (source) => 'Ipv4Address($source)',
+    serialize: (value) => '$value.toJson()',
+    helper: _ipv4AddressHelper,
+  ),
+  'ipv6': _FormatHint(
+    name: 'ipv6',
+    typeName: 'Ipv6Address',
+    deserialize: (source) => 'Ipv6Address($source)',
+    serialize: (value) => '$value.toJson()',
+    helper: _ipv6AddressHelper,
+  ),
+  'iri': _FormatHint(
+    name: 'iri',
+    typeName: 'Uri',
+    deserialize: (source) => 'Uri.parse($source)',
+    serialize: (value) => '$value.toString()',
+  ),
+  'iri-reference': _FormatHint(
+    name: 'iri-reference',
+    typeName: 'UriReference',
+    deserialize: (source) => 'UriReference(Uri.parse($source))',
+    serialize: (value) => '$value.toJson()',
+    helper: _uriReferenceHelper,
+  ),
+};
+
+final Map<String, _FormatInfo> _formatRegistry = <String, _FormatInfo>{
+  'date-time': _FormatInfo(
+    description: 'Date and time as defined by RFC 3339 date-time.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-dates-times-and-duration',
+  ),
+  'date': _FormatInfo(
+    description: 'Calendar date as defined by RFC 3339 full-date.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-dates-times-and-duration',
+  ),
+  'time': _FormatInfo(
+    description: 'Time of day as defined by RFC 3339 full-time.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-dates-times-and-duration',
+  ),
+  'duration': _FormatInfo(
+    description: 'Duration as defined by RFC 3339 duration.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-dates-times-and-duration',
+  ),
+  'email': _FormatInfo(
+    description: 'Email address as defined by RFC 5321 Mailbox.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-email-addresses',
+  ),
+  'hostname': _FormatInfo(
+    description: 'Hostname as defined by RFC 1123.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-hostnames',
+  ),
+  'ipv4': _FormatInfo(
+    description: 'IPv4 address as defined by RFC 2673 section 3.2.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-ip-addresses',
+  ),
+  'ipv6': _FormatInfo(
+    description: 'IPv6 address as defined by RFC 4291.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-ip-addresses',
+  ),
+  'uri': _FormatInfo(
+    description: 'URI as defined by RFC 3986.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-resource-identifiers',
+  ),
+  'uri-reference': _FormatInfo(
+    description: 'URI Reference as defined by RFC 3986.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-resource-identifiers',
+  ),
+  'uri-template': _FormatInfo(
+    description: 'URI Template as defined by RFC 6570.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-uri-template',
+  ),
+  'iri': _FormatInfo(
+    description:
+        'Internationalized Resource Identifier as defined by RFC 3987.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-resource-identifiers',
+  ),
+  'iri-reference': _FormatInfo(
+    description: 'IRI Reference as defined by RFC 3987.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-resource-identifiers',
+  ),
+  'uuid': _FormatInfo(
+    description: 'Universally Unique Identifier as defined by RFC 4122.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-resource-identifiers',
+  ),
+  'regex': _FormatInfo(
+    description: 'Regular expression as defined in ECMA-262.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-regular-expressions',
+  ),
+  'json-pointer': _FormatInfo(
+    description: 'JSON Pointer as defined by RFC 6901.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-json-pointer',
+  ),
+  'relative-json-pointer': _FormatInfo(
+    description:
+        'Relative JSON Pointer as defined by relative-json-pointer draft-01.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-json-pointer',
+  ),
 };
 
 const IrHelper _validationHelper = IrHelper(
   name: 'ValidationError',
   code: '''
-String _appendJsonPointer(String pointer, String token) {
+String appendJsonPointer(String pointer, String token) {
   final escaped = token.replaceAll('~', '~0').replaceAll('/', '~1');
   if (pointer.isEmpty) return '/' + escaped;
   return pointer + '/' + escaped;
 }
 
-Never _throwValidationError(String pointer, String keyword, String message) =>
+Never throwValidationError(String pointer, String keyword, String message) =>
     throw ValidationError(pointer: pointer, keyword: keyword, message: message);
+
+class ValidationAnnotation {
+  const ValidationAnnotation({
+    required this.keyword,
+    required this.value,
+    this.schemaPointer,
+  });
+
+  final String keyword;
+  final Object? value;
+  final String? schemaPointer;
+}
+
+class ValidationContext {
+  ValidationContext();
+
+  final Map<String, List<ValidationAnnotation>> annotations = <String, List<ValidationAnnotation>>{};
+  final Map<String, Set<String>> evaluatedProperties = <String, Set<String>>{};
+  final Map<String, Set<int>> evaluatedItems = <String, Set<int>>{};
+
+  void annotate(
+    String pointer,
+    String keyword,
+    Object? value, {
+    String? schemaPointer,
+  }) {
+    final list = annotations.putIfAbsent(pointer, () => <ValidationAnnotation>[]);
+    list.add(
+      ValidationAnnotation(
+        keyword: keyword,
+        value: value,
+        schemaPointer: schemaPointer,
+      ),
+    );
+  }
+
+  void markProperty(String pointer, String property) {
+    evaluatedProperties.putIfAbsent(pointer, () => <String>{}).add(property);
+  }
+
+  void markItem(String pointer, int index) {
+    evaluatedItems.putIfAbsent(pointer, () => <int>{}).add(index);
+  }
+}
 
 class ValidationError implements Exception {
   ValidationError({
@@ -2410,3 +2879,19 @@ class ValidationError implements Exception {
 }
 ''',
 );
+String _elementClassName(String base) {
+  final lower = base.toLowerCase();
+  if (lower.endsWith('ies') && base.length > 3) {
+    return '${base.substring(0, base.length - 3)}y';
+  }
+  const esEndings = ['sses', 'ches', 'shes', 'xes', 'zes'];
+  for (final ending in esEndings) {
+    if (lower.endsWith(ending) && base.length > ending.length) {
+      return base.substring(0, base.length - 2);
+    }
+  }
+  if (lower.endsWith('s') && base.length > 1) {
+    return base.substring(0, base.length - 1);
+  }
+  return '${base}Item';
+}

@@ -1,4 +1,4 @@
-part of 'package:schemamodeschema/src/generator.dart';
+part of 'package:schema2model/src/generator.dart';
 
 /// Configuration used by [SchemaGenerator].
 class SchemaGeneratorOptions {

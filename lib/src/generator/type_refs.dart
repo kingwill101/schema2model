@@ -1,4 +1,4 @@
-part of 'package:schemamodeschema/src/generator.dart';
+part of 'package:schema2model/src/generator.dart';
 
 abstract class TypeRef {
   const TypeRef();
@@ -54,6 +54,30 @@ class DynamicTypeRef extends PrimitiveTypeRef {
 
   @override
   String get identity => 'dynamic';
+}
+
+class FalseTypeRef extends TypeRef {
+  const FalseTypeRef();
+
+  @override
+  String dartType({bool nullable = false}) => nullable ? 'Object?' : 'Object?';
+
+  @override
+  String deserializeInline(
+    String sourceExpression, {
+    required bool required,
+  }) =>
+      sourceExpression;
+
+  @override
+  String serializeInline(String valueExpression, {required bool required}) =>
+      valueExpression;
+
+  @override
+  bool get requiresConversionOnSerialize => false;
+
+  @override
+  String get identity => 'false';
 }
 
 class ObjectTypeRef extends TypeRef {
