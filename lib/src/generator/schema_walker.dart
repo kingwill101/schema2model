@@ -1676,10 +1676,22 @@ class _SchemaWalker {
         .map(_unescapePointerToken)
         .toList();
     final relevant = segments.lastWhereOrNull((segment) {
-      return segment != 'properties' &&
-          segment != r'$defs' &&
-          segment != 'definitions' &&
-          segment != 'items';
+      // Filter out structural keywords
+      if (segment == 'properties' ||
+          segment == r'$defs' ||
+          segment == 'definitions' ||
+          segment == 'items') {
+        return false;
+      }
+      // Filter out union keywords (oneOf, anyOf, allOf)
+      if (segment == 'oneOf' || segment == 'anyOf' || segment == 'allOf') {
+        return false;
+      }
+      // Filter out numeric array indices
+      if (int.tryParse(segment) != null) {
+        return false;
+      }
+      return true;
     });
     return relevant ?? 'Generated';
   }
