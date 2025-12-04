@@ -8,12 +8,15 @@ import 'normal_job_services.dart';
 import 'normal_job_strategy.dart';
 import 'reusable_workflow_call_job_strategy.dart';
 import 'step.dart';
+import 'validation_error.dart';
 
 part 'normal_job.dart';
 part 'reusable_workflow_call_job.dart';
 
 sealed class GithubWorkflowJobsPatternProperty1 {
   const GithubWorkflowJobsPatternProperty1();
+
+  void validate({String pointer = '', ValidationContext? context});
 
   factory GithubWorkflowJobsPatternProperty1.fromJson(Map<String, dynamic> json) {
     final keys = json.keys.toSet();

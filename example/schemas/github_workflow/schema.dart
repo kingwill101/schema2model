@@ -43,3 +43,4 @@ export 'schema_generated/event.dart';
 export 'schema_generated/machine.dart';
 export 'schema_generated/workflow_dispatch_input_type.dart';
 export 'schema_generated/class22_workflow_call_inputs_pattern_property1_type.dart';
+export 'schema_generated/validation_error.dart';

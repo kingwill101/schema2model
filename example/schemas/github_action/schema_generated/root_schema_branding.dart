@@ -4,6 +4,7 @@
 
 import 'root_schema_branding_color.dart';
 import 'root_schema_branding_icon.dart';
+import 'validation_error.dart';
 
 /// You can use a color and Feather icon to create a badge to personalize and distinguish your action. Badges are shown next to your action name in GitHub Marketplace.
 class RootSchemaBranding {
@@ -40,4 +41,6 @@ class RootSchemaBranding {
     if (icon != null) map['icon'] = icon!.toJson();
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

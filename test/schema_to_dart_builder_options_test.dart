@@ -1,5 +1,5 @@
 import 'package:build/build.dart';
-import 'package:schemamodeschema/src/schema_to_dart_builder.dart';
+import 'package:schema2model/src/schema_to_dart_builder.dart';
 import 'package:test/test.dart';
 
 void main() {

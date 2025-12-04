@@ -1,4 +1,4 @@
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 import 'package:test/test.dart';
 
 void main() {

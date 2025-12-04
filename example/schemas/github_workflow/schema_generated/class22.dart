@@ -5,6 +5,7 @@
 import 'class22_schedule_item.dart';
 import 'class22_workflow_call.dart';
 import 'class22_workflow_dispatch.dart';
+import 'validation_error.dart';
 
 class Class22 {
   /// Runs your workflow anytime the branch_protection_rule event occurs. More than one activity type triggers this event.
@@ -287,4 +288,6 @@ class Class22 {
     if (workflowRun != null) map['workflow_run'] = workflowRun;
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

@@ -1,4 +1,4 @@
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 import 'package:test/test.dart';
 
 SchemaGenerator _createGenerator({
@@ -204,6 +204,47 @@ void main() {
       expect(spec.properties.map((p) => p.fieldName), contains('value'));
     });
 
+    test('resolves relative ids against the current base uri', () {
+      final documents = <String, Map<String, dynamic>>{
+        'https://example.com/root/root.json': <String, dynamic>{
+          r'$id': 'root.json',
+          'type': 'object',
+          'properties': <String, dynamic>{
+            'useChild': <String, dynamic>{r'$ref': 'shared.json'},
+          },
+        },
+        'https://example.com/root/shared.json': <String, dynamic>{
+          r'$id': 'shared.json',
+          'type': 'object',
+          'properties': <String, dynamic>{
+            'name': <String, dynamic>{'type': 'string'},
+          },
+        },
+      };
+
+      Map<String, dynamic> loader(Uri uri) {
+        final doc = documents[uri.toString()];
+        if (doc == null) {
+          throw StateError('Unexpected URI $uri');
+        }
+        return doc;
+      }
+
+      final generator = _createGenerator(
+        documentLoader: loader,
+        baseUri: Uri.parse('https://example.com/root/root.json'),
+      );
+
+      final ir = generator.buildIr(documents['https://example.com/root/root.json']!);
+      final root = ir.rootClass;
+      final useChild =
+          root.properties.singleWhere((prop) => prop.fieldName == 'useChild');
+
+      expect(useChild.typeRef, isA<ObjectTypeRef>());
+      final spec = (useChild.typeRef as ObjectTypeRef).spec;
+      expect(spec.properties.map((p) => p.fieldName), contains('name'));
+    });
+
     test('throws on duplicate anchors', () {
       final generator = _createGenerator(
         baseUri: Uri.parse('https://example.com/root'),
@@ -271,11 +312,11 @@ void main() {
         'type': 'object',
         r'$defs': <String, dynamic>{
           'first': <String, dynamic>{
-            r'$id': 'https://example.com/shared',
+            r'$id': 'shared.json',
             'type': 'string',
           },
           'second': <String, dynamic>{
-            r'$id': 'https://example.com/shared',
+            r'$id': 'shared.json',
             'type': 'string',
           },
         },
@@ -287,7 +328,7 @@ void main() {
           isA<FormatException>().having(
             (error) => error.message,
             'message',
-            contains('Duplicate "\$id" "https://example.com/shared"'),
+            contains('Duplicate "\$id" "https://example.com/shared.json"'),
           ),
         ),
       );

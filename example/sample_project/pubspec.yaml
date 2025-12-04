@@ -1,0 +1,13 @@
+name: schema2model_sample
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  schema2model:
+    path: ../..
+
+dev_dependencies:
+  build_runner: ^2.4.11

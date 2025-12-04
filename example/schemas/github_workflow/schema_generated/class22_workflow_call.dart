@@ -4,6 +4,7 @@
 
 import 'class22_workflow_call_inputs.dart';
 import 'class22_workflow_call_outputs.dart';
+import 'validation_error.dart';
 
 /// Allows workflows to be reused by other workflows.
 class Class22WorkflowCall {
@@ -42,4 +43,6 @@ class Class22WorkflowCall {
     if (secrets != null) map['secrets'] = secrets;
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

@@ -63,7 +63,7 @@ class NormalJob extends GithubWorkflowJobsPatternProperty1 {
     this.services,
     this.steps,
     this.strategy,
-    this.timeoutMinutes,
+    this.timeoutMinutes = 360,
   }) : super();
 
   factory NormalJob.fromJson(Map<String, dynamic> json) {
@@ -98,7 +98,7 @@ class NormalJob extends GithubWorkflowJobsPatternProperty1 {
     remaining.remove('steps');
     final strategy = json['strategy'] == null ? null : NormalJobStrategy.fromJson((json['strategy'] as Map).cast<String, dynamic>());
     remaining.remove('strategy');
-    final timeoutMinutes = json['timeout-minutes'];
+    final timeoutMinutes = (json['timeout-minutes']) ?? 360;
     remaining.remove('timeout-minutes');
     var unmatched = Map<String, dynamic>.from(remaining);
     if (unmatched.isNotEmpty) {
@@ -145,5 +145,97 @@ class NormalJob extends GithubWorkflowJobsPatternProperty1 {
     if (strategy != null) map['strategy'] = strategy!.toJson();
     if (timeoutMinutes != null) map['timeout-minutes'] = timeoutMinutes;
     return map;
+  }
+
+  @override
+  void validate({String pointer = '', ValidationContext? context}) {
+    final _ptr0 = appendJsonPointer(pointer, 'concurrency');
+    final _value0 = concurrency;
+    if (_value0 != null) {
+      context?.markProperty(pointer, 'concurrency');
+    }
+    final _ptr1 = appendJsonPointer(pointer, 'container');
+    final _value1 = container;
+    if (_value1 != null) {
+      context?.markProperty(pointer, 'container');
+    }
+    final _ptr2 = appendJsonPointer(pointer, 'continue-on-error');
+    final _value2 = continueOnError;
+    if (_value2 != null) {
+      context?.markProperty(pointer, 'continue-on-error');
+    }
+    final _ptr3 = appendJsonPointer(pointer, 'defaults');
+    final _value3 = defaults;
+    if (_value3 != null) {
+      context?.markProperty(pointer, 'defaults');
+    }
+    final _ptr4 = appendJsonPointer(pointer, 'env');
+    final _value4 = env;
+    if (_value4 != null) {
+      context?.markProperty(pointer, 'env');
+    }
+    final _ptr5 = appendJsonPointer(pointer, 'environment');
+    final _value5 = environment;
+    if (_value5 != null) {
+      context?.markProperty(pointer, 'environment');
+    }
+    final _ptr6 = appendJsonPointer(pointer, 'if');
+    final _value6 = if_;
+    if (_value6 != null) {
+      context?.markProperty(pointer, 'if');
+    }
+    final _ptr7 = appendJsonPointer(pointer, 'name');
+    final _value7 = name;
+    if (_value7 != null) {
+      context?.markProperty(pointer, 'name');
+    }
+    final _ptr8 = appendJsonPointer(pointer, 'needs');
+    final _value8 = needs;
+    if (_value8 != null) {
+      context?.markProperty(pointer, 'needs');
+    }
+    final _ptr9 = appendJsonPointer(pointer, 'outputs');
+    final _value9 = outputs;
+    if (_value9 != null) {
+      context?.markProperty(pointer, 'outputs');
+    }
+    final _ptr10 = appendJsonPointer(pointer, 'permissions');
+    final _value10 = permissions;
+    if (_value10 != null) {
+      context?.markProperty(pointer, 'permissions');
+    }
+    final _ptr11 = appendJsonPointer(pointer, 'runs-on');
+    final _value11 = runsOn;
+    context?.markProperty(pointer, 'runs-on');
+    final _ptr12 = appendJsonPointer(pointer, 'services');
+    final _value12 = services;
+    if (_value12 != null) {
+      context?.markProperty(pointer, 'services');
+    }
+    final _ptr13 = appendJsonPointer(pointer, 'steps');
+    final _value13 = steps;
+    if (_value13 != null) {
+      context?.markProperty(pointer, 'steps');
+      final _lenp13 = _value13.length;
+      final _evaluatedp13 = List<bool>.filled(_lenp13, false);
+      for (var i = 0; i < _lenp13; i++) {
+        final itemPointer = appendJsonPointer(_ptr13, i.toString());
+        final item = _value13[i];
+        item.validate(pointer: itemPointer, context: context);
+        _evaluatedp13[i] = true;
+        context?.markItem(_ptr13, i);
+      }
+    }
+    final _ptr14 = appendJsonPointer(pointer, 'strategy');
+    final _value14 = strategy;
+    if (_value14 != null) {
+      context?.markProperty(pointer, 'strategy');
+    }
+    final _ptr15 = appendJsonPointer(pointer, 'timeout-minutes');
+    final _value15 = timeoutMinutes;
+    context?.annotate(_ptr15, 'default', 360, schemaPointer: '#/definitions/normalJob/properties/timeout-minutes');
+    if (_value15 != null) {
+      context?.markProperty(pointer, 'timeout-minutes');
+    }
   }
 }

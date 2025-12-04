@@ -66,4 +66,7 @@ class RunsJavascript extends RootSchemaRuns {
     map['using'] = using.toJson();
     return map;
   }
+
+  @override
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

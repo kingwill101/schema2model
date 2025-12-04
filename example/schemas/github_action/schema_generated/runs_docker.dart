@@ -91,4 +91,53 @@ class RunsDocker extends RootSchemaRuns {
     map['using'] = using;
     return map;
   }
+
+  @override
+  void validate({String pointer = '', ValidationContext? context}) {
+    final _ptr0 = appendJsonPointer(pointer, 'args');
+    final _value0 = args;
+    if (_value0 != null) {
+      context?.markProperty(pointer, 'args');
+    }
+    final _ptr1 = appendJsonPointer(pointer, 'entrypoint');
+    final _value1 = entrypoint;
+    if (_value1 != null) {
+      context?.markProperty(pointer, 'entrypoint');
+    }
+    final _ptr2 = appendJsonPointer(pointer, 'env');
+    final _value2 = env;
+    if (_value2 != null) {
+      context?.markProperty(pointer, 'env');
+    }
+    final _ptr3 = appendJsonPointer(pointer, 'image');
+    final _value3 = image;
+    context?.markProperty(pointer, 'image');
+    final _ptr4 = appendJsonPointer(pointer, 'post-entrypoint');
+    final _value4 = postEntrypoint;
+    if (_value4 != null) {
+      context?.markProperty(pointer, 'post-entrypoint');
+    }
+    final _ptr5 = appendJsonPointer(pointer, 'post-if');
+    final _value5 = postIf;
+    if (_value5 != null) {
+      context?.markProperty(pointer, 'post-if');
+    }
+    final _ptr6 = appendJsonPointer(pointer, 'pre-entrypoint');
+    final _value6 = preEntrypoint;
+    if (_value6 != null) {
+      context?.markProperty(pointer, 'pre-entrypoint');
+    }
+    final _ptr7 = appendJsonPointer(pointer, 'pre-if');
+    final _value7 = preIf;
+    if (_value7 != null) {
+      context?.markProperty(pointer, 'pre-if');
+    }
+    final _ptr8 = appendJsonPointer(pointer, 'using');
+    final _value8 = using;
+    context?.markProperty(pointer, 'using');
+    final _actualp8 = _value8;
+    if (_actualp8 != 'docker') {
+      throwValidationError(_ptr8, 'const', 'Expected value equal to \'docker\' but found ' + _actualp8.toString() + '.');
+    }
+  }
 }

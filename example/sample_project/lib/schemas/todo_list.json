@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TodoList",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Display name for this list."
+    },
+    "items": {
+      "type": "array",
+      "description": "Collection of to-do entries.",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string"},
+          "done": {"type": "boolean", "default": false}
+        },
+        "unevaluatedProperties": false,
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 25
+    },
+    "tags": {
+      "type": "array",
+      "description": "Optional labels applied to the list.",
+      "items": {"type": "string"},
+      "minContains": 1,
+      "maxContains": 5,
+      "contains": {
+        "type": "string",
+        "pattern": "^urgent"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "reminder": {
+          "type": "object",
+          "required": ["time"],
+          "properties": {
+            "time": {"type": "string", "format": "date-time"},
+            "channel": {"type": "string"},
+            "timezone": {"type": "string"}
+          },
+          "dependentRequired": {
+            "channel": ["timezone"]
+          },
+          "unevaluatedProperties": false
+        },
+        "owner": {"type": "string"},
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        }
+      },
+      "required": ["owner"],
+      "dependentSchemas": {
+        "reminder": {
+          "properties": {
+            "channel": {
+              "type": "string",
+              "enum": ["email", "sms", "push"]
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["name", "items"],
+  "additionalProperties": false
+}

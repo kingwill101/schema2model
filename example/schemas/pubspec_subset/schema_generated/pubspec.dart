@@ -4,6 +4,7 @@
 
 import 'pubspec_environment.dart';
 import 'pubspec_publish_to.dart';
+import 'validation_error.dart';
 
 /// A tiny subset of the pubspec.yaml structure to demonstrate generation.
 class Pubspec {
@@ -47,4 +48,6 @@ class Pubspec {
     if (version != null) map['version'] = version;
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

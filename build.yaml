@@ -1,7 +1,7 @@
 targets:
   $default:
     builders:
-      schemamodeschema|schema_builder:
+      schema2model|schema_builder:
         generate_for:
           - lib/**.schema.json
           - lib/**.json
@@ -10,7 +10,7 @@ targets:
 
 builders:
   schema_builder:
-    import: "package:schemamodeschema/builder.dart"
+    import: "package:schema2model/builder.dart"
     builder_factories: ["schemaToDartBuilder"]
     build_extensions:
       ".json": [".dart"]

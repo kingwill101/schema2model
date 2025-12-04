@@ -5,3 +5,4 @@
 export 'schema_generated/pubspec.dart';
 export 'schema_generated/pubspec_environment.dart';
 export 'schema_generated/pubspec_publish_to.dart';
+export 'schema_generated/validation_error.dart';

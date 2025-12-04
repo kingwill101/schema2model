@@ -1,4 +1,4 @@
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -50,17 +50,20 @@ void main() {
       );
       final generated = generator.generate(schema);
 
-      expect(generated, contains("void validate({String pointer = ''})"));
       expect(
         generated,
-        contains("    final _ptr0 = _appendJsonPointer(pointer, 'address');"),
+        contains("void validate({String pointer = '', ValidationContext? context})"),
       );
-      expect(generated, contains("_throwValidationError(_ptr0"));
-      expect(generated, contains("_appendJsonPointer(pointer, 'city')"));
+      expect(
+        generated,
+        contains("    final _ptr0 = appendJsonPointer(pointer, 'address');"),
+      );
+      expect(generated, contains("throwValidationError(_ptr0"));
+      expect(generated, contains("appendJsonPointer(pointer, 'city')"));
       expect(generated, contains('class ValidationError implements Exception'));
       expect(
         generated,
-        contains("final itemPointer = _appendJsonPointer(_ptr5, i.toString());"),
+        contains("final itemPointer = appendJsonPointer(_ptr5, i.toString());"),
       );
       expect(generated, contains("_actualp4 != 'active'"));
     });

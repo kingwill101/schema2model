@@ -7,7 +7,7 @@ part of 'root_schema_runs.dart';
 /// Configures the path to the composite action, and the application used to execute the code.
 class RunsComposite extends RootSchemaRuns {
   /// The run steps that you plan to run in this action.
-  final List<RunsCompositeStepsItem> steps;
+  final List<RunsCompositeStep> steps;
   /// To use a composite run steps action, set this to 'composite'.
   final String using;
 
@@ -18,7 +18,7 @@ class RunsComposite extends RootSchemaRuns {
 
   factory RunsComposite.fromJson(Map<String, dynamic> json) {
     final remaining = Map<String, dynamic>.from(json);
-    final steps = (json['steps'] as List).map((e) => RunsCompositeStepsItem.fromJson((e as Map).cast<String, dynamic>())).toList();
+    final steps = (json['steps'] as List).map((e) => RunsCompositeStep.fromJson((e as Map).cast<String, dynamic>())).toList();
     remaining.remove('steps');
     final using = json['using'] as String;
     remaining.remove('using');
@@ -39,5 +39,28 @@ class RunsComposite extends RootSchemaRuns {
     map['steps'] = steps.map((e) => e.toJson()).toList();
     map['using'] = using;
     return map;
+  }
+
+  @override
+  void validate({String pointer = '', ValidationContext? context}) {
+    final _ptr0 = appendJsonPointer(pointer, 'steps');
+    final _value0 = steps;
+    context?.markProperty(pointer, 'steps');
+    final _lenp0 = _value0.length;
+    final _evaluatedp0 = List<bool>.filled(_lenp0, false);
+    for (var i = 0; i < _lenp0; i++) {
+      final itemPointer = appendJsonPointer(_ptr0, i.toString());
+      final item = _value0[i];
+      item.validate(pointer: itemPointer, context: context);
+      _evaluatedp0[i] = true;
+      context?.markItem(_ptr0, i);
+    }
+    final _ptr1 = appendJsonPointer(pointer, 'using');
+    final _value1 = using;
+    context?.markProperty(pointer, 'using');
+    final _actualp1 = _value1;
+    if (_actualp1 != 'composite') {
+      throwValidationError(_ptr1, 'const', 'Expected value equal to \'composite\' but found ' + _actualp1.toString() + '.');
+    }
   }
 }

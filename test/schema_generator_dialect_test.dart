@@ -1,8 +1,8 @@
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 import 'package:test/test.dart';
 
 void main() {
-  SchemaGenerator _createGenerator({
+  SchemaGenerator createGenerator({
     SchemaGeneratorOptions? options,
   }) {
     return SchemaGenerator(
@@ -23,7 +23,7 @@ void main() {
         },
       };
 
-      final generator = _createGenerator();
+      final generator = createGenerator();
       expect(() => generator.buildIr(schema), returnsNormally);
     });
 
@@ -32,7 +32,7 @@ void main() {
         r'$schema': 'https://example.com/custom-dialect',
         'type': 'object',
       };
-      final generator = _createGenerator();
+      final generator = createGenerator();
 
       expect(
         () => generator.buildIr(schema),
@@ -54,7 +54,7 @@ void main() {
         },
         'type': 'string',
       };
-      final generator = _createGenerator();
+      final generator = createGenerator();
 
       expect(
         () => generator.buildIr(schema),
@@ -72,7 +72,7 @@ void main() {
       final schema = <String, dynamic>{
         'type': 'object',
       };
-      final generator = _createGenerator(
+      final generator = createGenerator(
         options: const SchemaGeneratorOptions(
           sourcePath: 'memory://schema.json',
           defaultDialect: null,

@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 import 'package:test/test.dart';
 
 import '../example/schemas/github_workflow/schema.dart' as model;

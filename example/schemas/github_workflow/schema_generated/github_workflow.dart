@@ -4,6 +4,7 @@
 
 import 'defaults.dart';
 import 'github_workflow_jobs.dart';
+import 'validation_error.dart';
 
 class GithubWorkflow {
   /// Concurrency ensures that only a single job or workflow using the same concurrency group will run at a time. A concurrency group can be any string or expression. The expression can use any context except for the secrets context.
@@ -84,4 +85,6 @@ class GithubWorkflow {
     if (runName != null) map['run-name'] = runName;
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

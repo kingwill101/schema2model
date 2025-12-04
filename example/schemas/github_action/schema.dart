@@ -4,8 +4,8 @@
 
 export 'schema_generated/root_schema.dart';
 export 'schema_generated/class0.dart';
-export 'schema_generated/runs_composite_steps_item_with.dart';
-export 'schema_generated/runs_composite_steps_item.dart';
+export 'schema_generated/runs_composite_step_with.dart';
+export 'schema_generated/runs_composite_step.dart';
 export 'schema_generated/class02.dart';
 export 'schema_generated/outputs_pattern_property1.dart';
 export 'schema_generated/outputs.dart';
@@ -19,3 +19,4 @@ export 'schema_generated/runs_javascript_using.dart';
 export 'schema_generated/class1.dart';
 export 'schema_generated/root_schema_branding_color.dart';
 export 'schema_generated/root_schema_branding_icon.dart';
+export 'schema_generated/validation_error.dart';

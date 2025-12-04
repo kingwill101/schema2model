@@ -4,6 +4,7 @@
 
 import 'permissions_event_actions.dart';
 import 'permissions_event_models.dart';
+import 'validation_error.dart';
 
 class PermissionsEvent {
   final PermissionsEventActions? actions;
@@ -115,4 +116,6 @@ class PermissionsEvent {
     if (statuses != null) map['statuses'] = statuses!.toJson();
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }

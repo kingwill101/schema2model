@@ -1,0 +1,10 @@
+targets:
+  $default:
+    builders:
+      schema2model|schema_builder:
+        generate_for:
+          - lib/schemas/**.json
+        options:
+          emit_validation_helpers: true
+          include_globs:
+            - lib/schemas/**.json

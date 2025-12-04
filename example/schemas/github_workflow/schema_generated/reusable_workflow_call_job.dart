@@ -90,4 +90,55 @@ class ReusableWorkflowCallJob extends GithubWorkflowJobsPatternProperty1 {
     if (with_ != null) map['with'] = with_;
     return map;
   }
+
+  @override
+  void validate({String pointer = '', ValidationContext? context}) {
+    final _ptr0 = appendJsonPointer(pointer, 'concurrency');
+    final _value0 = concurrency;
+    if (_value0 != null) {
+      context?.markProperty(pointer, 'concurrency');
+    }
+    final _ptr1 = appendJsonPointer(pointer, 'if');
+    final _value1 = if_;
+    if (_value1 != null) {
+      context?.markProperty(pointer, 'if');
+    }
+    final _ptr2 = appendJsonPointer(pointer, 'name');
+    final _value2 = name;
+    if (_value2 != null) {
+      context?.markProperty(pointer, 'name');
+    }
+    final _ptr3 = appendJsonPointer(pointer, 'needs');
+    final _value3 = needs;
+    if (_value3 != null) {
+      context?.markProperty(pointer, 'needs');
+    }
+    final _ptr4 = appendJsonPointer(pointer, 'permissions');
+    final _value4 = permissions;
+    if (_value4 != null) {
+      context?.markProperty(pointer, 'permissions');
+    }
+    final _ptr5 = appendJsonPointer(pointer, 'secrets');
+    final _value5 = secrets;
+    if (_value5 != null) {
+      context?.markProperty(pointer, 'secrets');
+    }
+    final _ptr6 = appendJsonPointer(pointer, 'strategy');
+    final _value6 = strategy;
+    if (_value6 != null) {
+      context?.markProperty(pointer, 'strategy');
+    }
+    final _ptr7 = appendJsonPointer(pointer, 'uses');
+    final _value7 = uses;
+    context?.markProperty(pointer, 'uses');
+    final _patternp7 = RegExp('^(.+\\/)+(.+)\\.(ya?ml)(@.+)?\$');
+    if (!_patternp7.hasMatch(_value7)) {
+      throwValidationError(_ptr7, 'pattern', 'Expected value to match pattern ^(.+\\/)+(.+)\\.(ya?ml)(@.+)?\$ but found ' + _value7 + '.');
+    }
+    final _ptr8 = appendJsonPointer(pointer, 'with');
+    final _value8 = with_;
+    if (_value8 != null) {
+      context?.markProperty(pointer, 'with');
+    }
+  }
 }

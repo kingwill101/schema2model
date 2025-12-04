@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -131,12 +131,12 @@ void main() {
       final listType = stepsProperty.typeRef as ListTypeRef;
       expect(listType.itemType, isA<ObjectTypeRef>());
       final itemRef = listType.itemType as ObjectTypeRef;
-      expect(itemRef.spec.name, equals('RunsCompositeStepsItem'));
+      expect(itemRef.spec.name, equals('RunsCompositeStep'));
     });
 
     test('composite steps capture required combinations as metadata', () {
       final stepsItem = ir.classes.firstWhere(
-        (klass) => klass.name == 'RunsCompositeStepsItem',
+        (klass) => klass.name == 'RunsCompositeStep',
       );
       expect(stepsItem.conditionalConstraints, isNotEmpty);
       final constraint = stepsItem.conditionalConstraints.singleWhere(
@@ -164,7 +164,7 @@ void main() {
       expect(
         output,
         contains(
-          "_throwValidationError(pointer, 'oneOf', 'Expected exactly one of the combinations defined at #/definitions/runs-composite/properties/steps/items/oneOf to be satisfied ([\"run\", \"shell\"], [\"uses\"]).');",
+          "throwValidationError(pointer, 'oneOf', 'Expected exactly one of the combinations defined at #/definitions/runs-composite/properties/steps/items/oneOf to be satisfied ([\"run\", \"shell\"], [\"uses\"]).');",
         ),
       );
     });

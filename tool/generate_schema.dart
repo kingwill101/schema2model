@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:schemamodeschema/src/generator.dart';
+import 'package:schema2model/src/generator.dart';
 
 Future<void> main(List<String> arguments) async {
   if (arguments.isEmpty || arguments.length > 2) {
@@ -37,7 +37,7 @@ Future<void> main(List<String> arguments) async {
   final cacheDir = p.join(
     Directory.current.path,
     '.dart_tool',
-    'schemamodeschema',
+    'schema2model',
     'cache',
   );
 

@@ -5,6 +5,7 @@
 import 'root_schema_branding.dart';
 import 'root_schema_inputs.dart';
 import 'root_schema_runs.dart';
+import 'validation_error.dart';
 
 class RootSchema {
   /// The name of the action's author.
@@ -73,4 +74,6 @@ class RootSchema {
     map['runs'] = runs.toJson();
     return map;
   }
+
+  void validate({String pointer = '', ValidationContext? context}) {}
 }
