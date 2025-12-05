@@ -59,11 +59,13 @@ class _SchemaWalker {
        _inProgress = <_SchemaCacheKey>{},
        _classes = LinkedHashMap<String, IrClass>(),
        _enums = LinkedHashMap<String, IrEnum>(),
+       _mixedEnums = LinkedHashMap<String, IrMixedEnum>(),
        _unions = <IrUnion>[],
        _usedClassNames = <String>{},
        _usedEnumNames = <String>{},
        _classByLocation = <_SchemaCacheKey, IrClass>{},
        _enumByLocation = <_SchemaCacheKey, IrEnum>{},
+       _mixedEnumByLocation = <_SchemaCacheKey, IrMixedEnum>{},
        _helpers = LinkedHashMap<String, IrHelper>(),
        _rootUri = baseUri,
        _documentLoader = documentLoader,
@@ -86,11 +88,13 @@ class _SchemaWalker {
   final Set<_SchemaCacheKey> _inProgress;
   final LinkedHashMap<String, IrClass> _classes;
   final LinkedHashMap<String, IrEnum> _enums;
+  final LinkedHashMap<String, IrMixedEnum> _mixedEnums;
   final List<IrUnion> _unions;
   final Set<String> _usedClassNames;
   final Set<String> _usedEnumNames;
   final Map<_SchemaCacheKey, IrClass> _classByLocation;
   final Map<_SchemaCacheKey, IrEnum> _enumByLocation;
+  final Map<_SchemaCacheKey, IrMixedEnum> _mixedEnumByLocation;
   final LinkedHashMap<String, IrHelper> _helpers;
   final Uri _rootUri;
   final SchemaDocumentLoader _documentLoader;
@@ -111,6 +115,7 @@ class _SchemaWalker {
     _processDefinitions(_rootSchema, rootLocation, rootDialect);
     final classes = _orderedClasses(root);
     final enums = _enums.values.toList(growable: false);
+    final mixedEnums = _mixedEnums.values.toList(growable: false);
     if (_options.emitValidationHelpers) {
       _helpers.putIfAbsent(_validationHelper.name, () => _validationHelper);
     }
@@ -118,6 +123,7 @@ class _SchemaWalker {
       rootClass: root,
       classes: classes,
       enums: enums,
+      mixedEnums: mixedEnums,
       unions: List<IrUnion>.unmodifiable(_unions),
       helpers: List<IrHelper>.unmodifiable(_helpers.values),
     );
@@ -149,32 +155,47 @@ class _SchemaWalker {
 
       final location = _SchemaLocation(uri: currentUri, pointer: pointer);
 
-      final anchorValue = node[r'$anchor'];
-      if (anchorValue is String && anchorValue.isNotEmpty) {
-        _registerAnchor(currentUri, anchorValue, location);
-      } else if (anchorValue != null && anchorValue is! String) {
-        _schemaError('Expected "\$anchor" to be a string', location);
-      }
+      // Check if this location is a non-schema map (e.g., properties, patternProperties, dependentSchemas)
+      // These maps have property/pattern names as keys, not schema keywords
+      final isNonSchemaMap = pointer.endsWith('/properties') ||
+          pointer.endsWith('/patternProperties') ||
+          pointer.endsWith('/dependentSchemas') ||
+          pointer == '#/properties' ||
+          pointer == '#/patternProperties' ||
+          pointer == '#/dependentSchemas';
 
-      final dynamicAnchorValue = node[r'$dynamicAnchor'];
-      if (dynamicAnchorValue is String && dynamicAnchorValue.isNotEmpty) {
-        _registerDynamicAnchor(currentUri, dynamicAnchorValue, location);
-      } else if (dynamicAnchorValue != null && dynamicAnchorValue is! String) {
-        _schemaError('Expected "\$dynamicAnchor" to be a string', location);
+      // Only process schema keywords if we're in a schema context
+      if (!isNonSchemaMap) {
+        final anchorValue = node[r'$anchor'];
+        if (anchorValue is String && anchorValue.isNotEmpty) {
+          _registerAnchor(currentUri, anchorValue, location);
+        } else if (anchorValue != null && anchorValue is! String) {
+          _schemaError('Expected "\$anchor" to be a string', location);
+        }
+
+        final dynamicAnchorValue = node[r'$dynamicAnchor'];
+        if (dynamicAnchorValue is String && dynamicAnchorValue.isNotEmpty) {
+          _registerDynamicAnchor(currentUri, dynamicAnchorValue, location);
+        } else if (dynamicAnchorValue != null && dynamicAnchorValue is! String) {
+          _schemaError('Expected "\$dynamicAnchor" to be a string', location);
+        }
       }
 
       Uri effectiveUri = currentUri;
       var effectivePointer = pointer;
-      final idValue = node[r'$id'];
-      if (idValue is String && idValue.isNotEmpty) {
-        final canonical = _resolveIdentifierUri(idValue, currentUri, location);
-        _registerId(canonical, location);
-        effectiveUri = canonical;
-        effectivePointer = '#';
-        final canonicalKey = _SchemaCacheKey(effectiveUri, effectivePointer);
-        _indexedLocations.add(canonicalKey);
-      } else if (idValue != null && idValue is! String) {
-        _schemaError('Expected "\$id" to be a string', location);
+      
+      if (!isNonSchemaMap) {
+        final idValue = node[r'$id'];
+        if (idValue is String && idValue.isNotEmpty) {
+          final canonical = _resolveIdentifierUri(idValue, currentUri, location);
+          _registerId(canonical, location);
+          effectiveUri = canonical;
+          effectivePointer = '#';
+          final canonicalKey = _SchemaCacheKey(effectiveUri, effectivePointer);
+          _indexedLocations.add(canonicalKey);
+        } else if (idValue != null && idValue is! String) {
+          _schemaError('Expected "\$id" to be a string', location);
+        }
       }
 
       for (final entry in node.entries) {
@@ -277,6 +298,13 @@ class _SchemaWalker {
     final cachedEnum = _enumByLocation[cacheKey];
     if (cachedEnum != null) {
       final ref = EnumTypeRef(cachedEnum);
+      _typeCache[cacheKey] = ref;
+      return ref;
+    }
+
+    final cachedMixedEnum = _mixedEnumByLocation[cacheKey];
+    if (cachedMixedEnum != null) {
+      final ref = MixedEnumTypeRef(cachedMixedEnum);
       _typeCache[cacheKey] = ref;
       return ref;
     }
@@ -397,36 +425,91 @@ class _SchemaWalker {
       _processDefinitions(workingSchema, location, activeDialect);
 
       final enumValues = workingSchema['enum'];
-      if (enumValues is List &&
-          enumValues.isNotEmpty &&
-          enumValues.every((value) => value is String)) {
-        final enumName = _allocateEnumName(
-          workingSchema['title'] as String? ??
-              suggestedClassName ??
-              _nameFromPointer(location.pointer),
-        );
-        final description = workingSchema['description'] as String?;
-        final spec = _enums.putIfAbsent(
-          enumName,
-          () => IrEnum(
-            name: enumName,
-            description: description,
-            values: enumValues.mapIndexed((index, value) {
-              final identifier = _Naming.enumValue(
-                value as String? ?? 'value$index',
-              );
-              return IrEnumValue(
-                identifier: identifier,
-                jsonValue: value as String,
-              );
-            }).toList(),
-          ),
-        );
-        _enumByLocation[cacheKey] = spec;
+      if (enumValues is List && enumValues.isNotEmpty) {
+        // Check if all values are strings (simple enum)
+        if (enumValues.every((value) => value is String)) {
+          final enumName = _allocateEnumName(
+            workingSchema['title'] as String? ??
+                suggestedClassName ??
+                _nameFromPointer(location.pointer),
+          );
+          final description = workingSchema['description'] as String?;
+          final spec = _enums.putIfAbsent(
+            enumName,
+            () => IrEnum(
+              name: enumName,
+              description: description,
+              values: enumValues.mapIndexed((index, value) {
+                final identifier = _Naming.enumValue(
+                  value as String? ?? 'value$index',
+                );
+                return IrEnumValue(
+                  identifier: identifier,
+                  jsonValue: value as String,
+                );
+              }).toList(),
+            ),
+          );
+          _enumByLocation[cacheKey] = spec;
 
-        final ref = EnumTypeRef(spec);
-        _typeCache[cacheKey] = ref;
-        return ref;
+          final ref = EnumTypeRef(spec);
+          _typeCache[cacheKey] = ref;
+          return ref;
+        } else {
+          // Mixed-type enum - use sealed class
+          final enumName = _allocateEnumName(
+            workingSchema['title'] as String? ??
+                suggestedClassName ??
+                _nameFromPointer(location.pointer),
+          );
+          final description = workingSchema['description'] as String?;
+          
+          // Group values by type
+          final Map<String, List<dynamic>> valuesByType = {};
+          for (final value in enumValues) {
+            String typeKey;
+            if (value == null) {
+              typeKey = 'null';
+            } else if (value is String) {
+              typeKey = 'String';
+            } else if (value is int) {
+              typeKey = 'int';
+            } else if (value is double) {
+              typeKey = 'double';
+            } else if (value is bool) {
+              typeKey = 'bool';
+            } else {
+              typeKey = 'dynamic';
+            }
+            valuesByType.putIfAbsent(typeKey, () => []).add(value);
+          }
+          
+          // Create variants for each type
+          final variants = <IrMixedEnumVariant>[];
+          valuesByType.forEach((dartType, values) {
+            final className = '$enumName${dartType == 'null' ? 'Null' : dartType}';
+            variants.add(IrMixedEnumVariant(
+              className: className,
+              dartType: dartType,
+              values: values,
+              isNullable: dartType == 'null',
+            ));
+          });
+          
+          final spec = _mixedEnums.putIfAbsent(
+            enumName,
+            () => IrMixedEnum(
+              name: enumName,
+              description: description,
+              variants: variants,
+            ),
+          );
+          _mixedEnumByLocation[cacheKey] = spec;
+          
+          final ref = MixedEnumTypeRef(spec);
+          _typeCache[cacheKey] = ref;
+          return ref;
+        }
       }
 
       final unionKeyword = workingSchema.containsKey('oneOf')
@@ -2174,12 +2257,38 @@ class _SchemaWalker {
       }
     }
 
+    // Array constraints
+    final multipleOfRaw = schema['multipleOf'];
+    final multipleOf = multipleOfRaw is num ? multipleOfRaw : null;
+
+    final minItemsRaw = schema['minItems'];
+    final minItems = minItemsRaw is int ? minItemsRaw : null;
+
+    final maxItemsRaw = schema['maxItems'];
+    final maxItems = maxItemsRaw is int ? maxItemsRaw : null;
+
+    final uniqueItemsRaw = schema['uniqueItems'];
+    final uniqueItems = uniqueItemsRaw is bool ? uniqueItemsRaw : null;
+
+    // Object constraints
+    final minPropertiesRaw = schema['minProperties'];
+    final minProperties = minPropertiesRaw is int ? minPropertiesRaw : null;
+
+    final maxPropertiesRaw = schema['maxProperties'];
+    final maxProperties = maxPropertiesRaw is int ? maxPropertiesRaw : null;
+
     if (minLength == null &&
         maxLength == null &&
         minimum == null &&
         maximum == null &&
         pattern == null &&
-        constValue == null) {
+        constValue == null &&
+        multipleOf == null &&
+        minItems == null &&
+        maxItems == null &&
+        uniqueItems == null &&
+        minProperties == null &&
+        maxProperties == null) {
       return null;
     }
 
@@ -2192,6 +2301,12 @@ class _SchemaWalker {
       exclusiveMaximum: exclusiveMaximum,
       pattern: pattern,
       constValue: constValue,
+      multipleOf: multipleOf,
+      minItems: minItems,
+      maxItems: maxItems,
+      uniqueItems: uniqueItems,
+      minProperties: minProperties,
+      maxProperties: maxProperties,
     );
   }
 
@@ -2430,17 +2545,20 @@ class _SchemaWalker {
   }
 
   Map<String, dynamic> _loadDocument(Uri uri) {
-    final cached = _documentCache[uri];
+    // Remove fragment for document lookup - fragments point within a document
+    final documentUri = uri.removeFragment();
+    
+    final cached = _documentCache[documentUri];
     if (cached != null) {
       return cached;
     }
-    final document = _documentLoader(uri);
-    _documentCache[uri] = document;
-    if (!_documentDialects.containsKey(uri)) {
-      final dialect = _detectDocumentDialect(uri, document);
-      _documentDialects[uri] = dialect;
+    final document = _documentLoader(documentUri);
+    _documentCache[documentUri] = document;
+    if (!_documentDialects.containsKey(documentUri)) {
+      final dialect = _detectDocumentDialect(documentUri, document);
+      _documentDialects[documentUri] = dialect;
     }
-    _indexDocument(uri, document);
+    _indexDocument(documentUri, document);
     return document;
   }
 

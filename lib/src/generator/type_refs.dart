@@ -213,6 +213,39 @@ class EnumTypeRef extends TypeRef {
   String get identity => 'enum:${spec.name}';
 }
 
+class MixedEnumTypeRef extends TypeRef {
+  const MixedEnumTypeRef(this.spec);
+
+  final IrMixedEnum spec;
+
+  @override
+  String dartType({bool nullable = false}) =>
+      nullable ? '${spec.name}?' : spec.name;
+
+  @override
+  String deserializeInline(String sourceExpression, {required bool required}) {
+    final invocation = '${spec.name}.fromJson($sourceExpression)';
+    if (required) {
+      return invocation;
+    }
+    return '$sourceExpression == null ? null : $invocation';
+  }
+
+  @override
+  String serializeInline(String valueExpression, {required bool required}) {
+    if (required) {
+      return '$valueExpression.toJson()';
+    }
+    return '$valueExpression?.toJson()';
+  }
+
+  @override
+  bool get requiresConversionOnSerialize => true;
+
+  @override
+  String get identity => 'mixedenum:${spec.name}';
+}
+
 class ListTypeRef extends TypeRef {
   const ListTypeRef({
     required this.itemType,

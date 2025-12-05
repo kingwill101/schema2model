@@ -22,6 +22,8 @@ class SchemaGeneratorOptions {
     this.emitValidationHelpers = false,
     this.emitReadmeSnippets = false,
     this.enableContentKeywords = false,
+    this.generateHelpers = false,
+    this.emitUsageDocs = false,
     this.defaultDialect = SchemaDialect.latest,
     this.supportedDialects = SchemaDialect.defaultDialectRegistry,
   });
@@ -45,6 +47,8 @@ class SchemaGeneratorOptions {
   final bool emitValidationHelpers;
   final bool emitReadmeSnippets;
   final bool enableContentKeywords;
+  final bool generateHelpers;
+  final bool emitUsageDocs;
   final SchemaDialect? defaultDialect;
   final Map<String, SchemaDialect> supportedDialects;
 
@@ -64,6 +68,8 @@ class SchemaGeneratorOptions {
     bool? emitValidationHelpers,
     bool? emitReadmeSnippets,
     bool? enableContentKeywords,
+    bool? generateHelpers,
+    bool? emitUsageDocs,
     SchemaDialect? defaultDialect,
     Map<String, SchemaDialect>? supportedDialects,
   }) {
@@ -88,6 +94,8 @@ class SchemaGeneratorOptions {
           emitValidationHelpers ?? this.emitValidationHelpers,
       emitReadmeSnippets: emitReadmeSnippets ?? this.emitReadmeSnippets,
       enableContentKeywords: enableContentKeywords ?? this.enableContentKeywords,
+      generateHelpers: generateHelpers ?? this.generateHelpers,
+      emitUsageDocs: emitUsageDocs ?? this.emitUsageDocs,
       defaultDialect: defaultDialect ?? this.defaultDialect,
       supportedDialects: supportedDialects ?? this.supportedDialects,
     );

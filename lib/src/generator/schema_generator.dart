@@ -60,6 +60,8 @@ class SchemaGenerator {
         klass.name: '${_Naming.fileNameFromType(klass.name)}.dart',
       for (final enumeration in ir.enums)
         enumeration.name: '${_Naming.fileNameFromType(enumeration.name)}.dart',
+      for (final mixedEnum in ir.mixedEnums)
+        mixedEnum.name: '${_Naming.fileNameFromType(mixedEnum.name)}.dart',
     };
     for (final helper in ir.helpers) {
       fileNameByType[helper.name] = helper.fileName;
@@ -174,6 +176,14 @@ class SchemaGenerator {
       files[fileName] = content.toString();
     }
 
+    for (final mixedEnum in ir.mixedEnums) {
+      final fileName = '${_Naming.fileNameFromType(mixedEnum.name)}.dart';
+      final content = StringBuffer()
+        ..write(_buildHeader())
+        ..write(emitter.renderMixedEnum(mixedEnum));
+      files[fileName] = content.toString();
+    }
+
     for (final helper in ir.helpers) {
       final content = StringBuffer()..write(_buildHeader());
       if (helper.imports.isNotEmpty) {
@@ -214,6 +224,25 @@ class SchemaGenerator {
     if (header.isNotEmpty) {
       buffer.writeln('// $header');
     }
+    
+    // Add usage documentation if enabled
+    if (options.emitUsageDocs) {
+      buffer.writeln('//');
+      buffer.writeln('// To parse JSON data:');
+      buffer.writeln('//');
+      buffer.writeln("//     import 'dart:convert';");
+      buffer.writeln('//');
+      buffer.writeln('//     final obj = ClassName.fromJson(jsonDecode(jsonString));');
+      buffer.writeln('//     final jsonString = jsonEncode(obj.toJson());');
+      if (options.generateHelpers) {
+        buffer.writeln('//');
+        buffer.writeln('// Or use the helper functions:');
+        buffer.writeln('//');
+        buffer.writeln('//     final obj = classNameFromJson(jsonString);');
+        buffer.writeln('//     final jsonString = classNameToJson(obj);');
+      }
+    }
+    
     buffer.writeln();
     return buffer.toString();
   }
@@ -513,10 +542,20 @@ class _SchemaEmitter {
 
     for (var i = 0; i < ir.enums.length; i++) {
       buffer.write(renderEnum(ir.enums[i]));
-      if (i != ir.enums.length - 1) {
+      if (i != ir.enums.length - 1 || ir.mixedEnums.isNotEmpty) {
         buffer.writeln();
       }
-      if (ir.helpers.isNotEmpty && i == ir.enums.length - 1) {
+      if (ir.helpers.isNotEmpty && i == ir.enums.length - 1 && ir.mixedEnums.isEmpty) {
+        buffer.writeln();
+      }
+    }
+
+    for (var i = 0; i < ir.mixedEnums.length; i++) {
+      buffer.write(renderMixedEnum(ir.mixedEnums[i]));
+      if (i != ir.mixedEnums.length - 1) {
+        buffer.writeln();
+      }
+      if (ir.helpers.isNotEmpty && i == ir.mixedEnums.length - 1) {
         buffer.writeln();
       }
     }
@@ -532,6 +571,32 @@ class _SchemaEmitter {
         }
       }
     }
+    
+    // Generate optional helper functions for root class
+    if (options.generateHelpers && ir.rootClass != null) {
+      final rootClassName = ir.rootClass.name;
+      final funcPrefix = _Naming.fieldName(rootClassName);
+      
+      // Ensure dart:convert is imported
+      if (!buffer.toString().contains("import 'dart:convert'")) {
+        // Insert import at the top if needed
+        final content = buffer.toString();
+        buffer.clear();
+        buffer.writeln("import 'dart:convert';");
+        buffer.writeln();
+        buffer.write(content);
+      }
+      
+      buffer.writeln();
+      buffer.writeln('/// Parses [str] as JSON and deserializes it into a [$rootClassName].');
+      buffer.writeln('$rootClassName ${funcPrefix}FromJson(String str) =>');
+      buffer.writeln('    $rootClassName.fromJson(json.decode(str) as Map<String, dynamic>);');
+      buffer.writeln();
+      buffer.writeln('/// Serializes [data] into a JSON string.');
+      buffer.writeln('String ${funcPrefix}ToJson($rootClassName data) =>');
+      buffer.writeln('    json.encode(data.toJson());');
+    }
+    
     return buffer.toString();
   }
 
@@ -551,6 +616,16 @@ class _SchemaEmitter {
     final buffer = StringBuffer();
     if (klass.description != null && klass.description!.trim().isNotEmpty) {
       _writeDocumentation(buffer, klass.description!);
+    }
+    if (klass.propertyNamesConstraint != null &&
+        klass.propertyNamesConstraint!.hasRules) {
+      final constraint = klass.propertyNamesConstraint!;
+      if (constraint.validation != null) {
+        final rules = _formatValidationConstraints(constraint.validation!);
+        if (rules.isNotEmpty) {
+          buffer.writeln('/// propertyNames: $rules');
+        }
+      }
     }
     if (klass.extensionAnnotations.isNotEmpty) {
       for (final entry in klass.extensionAnnotations.entries) {
@@ -780,6 +855,67 @@ class _SchemaEmitter {
     return buffer.toString();
   }
 
+  String renderMixedEnum(IrMixedEnum mixedEnum) {
+    final buffer = StringBuffer();
+    if (options.emitDocumentation && mixedEnum.description != null) {
+      _writeDocumentation(buffer, mixedEnum.description!);
+    }
+
+    // Base sealed class
+    buffer.writeln('sealed class ${mixedEnum.name} {');
+    buffer.writeln('  const ${mixedEnum.name}();');
+    buffer.writeln();
+    buffer.writeln('  factory ${mixedEnum.name}.fromJson(dynamic json) {');
+    
+    // Generate type checks for each variant
+    for (final variant in mixedEnum.variants) {
+      if (variant.dartType == 'null') {
+        buffer.writeln('    if (json == null) return const ${variant.className}();');
+      } else if (variant.dartType == 'String') {
+        buffer.writeln('    if (json is String) return ${variant.className}(json);');
+      } else if (variant.dartType == 'int') {
+        buffer.writeln('    if (json is int) return ${variant.className}(json);');
+      } else if (variant.dartType == 'double') {
+        buffer.writeln('    if (json is double) return ${variant.className}(json);');
+      } else if (variant.dartType == 'bool') {
+        buffer.writeln('    if (json is bool) return ${variant.className}(json);');
+      }
+    }
+    
+    buffer.writeln('    throw Exception(\'Unknown ${mixedEnum.name} type: \${json.runtimeType}\');');
+    buffer.writeln('  }');
+    buffer.writeln();
+    buffer.writeln('  dynamic toJson();');
+    buffer.writeln('}');
+    buffer.writeln();
+
+    // Generate variant classes
+    for (final variant in mixedEnum.variants) {
+      if (variant.dartType == 'null') {
+        buffer.writeln('class ${variant.className} extends ${mixedEnum.name} {');
+        buffer.writeln('  const ${variant.className}();');
+        buffer.writeln();
+        buffer.writeln('  @override');
+        buffer.writeln('  dynamic toJson() => null;');
+        buffer.writeln('}');
+      } else {
+        buffer.writeln('class ${variant.className} extends ${mixedEnum.name} {');
+        buffer.writeln('  const ${variant.className}(this.value);');
+        buffer.writeln();
+        buffer.writeln('  final ${variant.dartType} value;');
+        buffer.writeln();
+        buffer.writeln('  @override');
+        buffer.writeln('  dynamic toJson() => value;');
+        buffer.writeln('}');
+      }
+      if (variant != mixedEnum.variants.last) {
+        buffer.writeln();
+      }
+    }
+
+    return buffer.toString();
+  }
+
   static void _writeDocumentation(
     StringBuffer buffer,
     String doc, {
@@ -841,6 +977,12 @@ class _SchemaEmitter {
       if (property.isWriteOnly) {
         buffer.writeln('  /// WRITE-ONLY: This property should not be included in responses (e.g., passwords, secrets).');
       }
+      if (property.validation != null && property.validation!.hasRules) {
+        final constraints = _formatValidationConstraints(property.validation!);
+        if (constraints.isNotEmpty) {
+          buffer.writeln('  /// Constraints: $constraints');
+        }
+      }
       if (property.extensionAnnotations.isNotEmpty) {
         for (final entry in property.extensionAnnotations.entries) {
           buffer.writeln('  /// ${entry.key}: ${entry.value}');
@@ -881,6 +1023,54 @@ class _SchemaEmitter {
         '  final ${unevaluatedField.mapType()} ${unevaluatedField.fieldName};',
       );
     }
+  }
+
+  String _formatValidationConstraints(PropertyValidationRules rules) {
+    final parts = <String>[];
+    
+    // String constraints
+    if (rules.minLength != null) parts.add('minLength: ${rules.minLength}');
+    if (rules.maxLength != null) parts.add('maxLength: ${rules.maxLength}');
+    if (rules.pattern != null) parts.add('pattern: ${rules.pattern}');
+    
+    // Numeric constraints
+    if (rules.minimum != null) {
+      if (rules.exclusiveMinimum) {
+        parts.add('exclusiveMinimum: ${rules.minimum}');
+      } else {
+        parts.add('minimum: ${rules.minimum}');
+      }
+    }
+    if (rules.maximum != null) {
+      if (rules.exclusiveMaximum) {
+        parts.add('exclusiveMaximum: ${rules.maximum}');
+      } else {
+        parts.add('maximum: ${rules.maximum}');
+      }
+    }
+    if (rules.multipleOf != null) parts.add('multipleOf: ${rules.multipleOf}');
+    
+    // Array constraints
+    if (rules.minItems != null) parts.add('minItems: ${rules.minItems}');
+    if (rules.maxItems != null) parts.add('maxItems: ${rules.maxItems}');
+    if (rules.uniqueItems != null && rules.uniqueItems!) {
+      parts.add('uniqueItems: true');
+    }
+    
+    // Object constraints
+    if (rules.minProperties != null) {
+      parts.add('minProperties: ${rules.minProperties}');
+    }
+    if (rules.maxProperties != null) {
+      parts.add('maxProperties: ${rules.maxProperties}');
+    }
+    
+    // Const value
+    if (rules.constValue != null) {
+      parts.add('const: ${rules.constValue}');
+    }
+    
+    return parts.join(', ');
   }
 
   void _writeConstructor(

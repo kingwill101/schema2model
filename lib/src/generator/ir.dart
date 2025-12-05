@@ -6,6 +6,7 @@ class SchemaIr {
     required this.rootClass,
     required this.classes,
     required this.enums,
+    required this.mixedEnums,
     required this.unions,
     required this.helpers,
   });
@@ -13,6 +14,7 @@ class SchemaIr {
   final IrClass rootClass;
   final List<IrClass> classes;
   final List<IrEnum> enums;
+  final List<IrMixedEnum> mixedEnums;
   final List<IrUnion> unions;
   final List<IrHelper> helpers;
 }
@@ -157,6 +159,34 @@ class IrEnumValue {
   final String jsonValue;
 }
 
+/// Represents a sealed class for mixed-type enums
+class IrMixedEnum {
+  IrMixedEnum({
+    required this.name,
+    required this.variants,
+    this.description,
+  });
+
+  final String name;
+  final List<IrMixedEnumVariant> variants;
+  final String? description;
+}
+
+/// Represents a variant of a mixed-type enum
+class IrMixedEnumVariant {
+  IrMixedEnumVariant({
+    required this.className,
+    required this.dartType,
+    required this.values,
+    required this.isNullable,
+  });
+
+  final String className;
+  final String dartType; // 'String', 'int', 'double', 'bool', 'null'
+  final List<dynamic> values;
+  final bool isNullable;
+}
+
 /// Represents a sealed union derived from `oneOf`/`anyOf` schema keywords.
 class IrUnion {
   IrUnion({
@@ -297,6 +327,12 @@ class PropertyValidationRules {
     this.exclusiveMaximum = false,
     this.pattern,
     this.constValue,
+    this.multipleOf,
+    this.minItems,
+    this.maxItems,
+    this.uniqueItems,
+    this.minProperties,
+    this.maxProperties,
   });
 
   final int? minLength;
@@ -307,6 +343,12 @@ class PropertyValidationRules {
   final bool exclusiveMaximum;
   final String? pattern;
   final Object? constValue;
+  final num? multipleOf;
+  final int? minItems;
+  final int? maxItems;
+  final bool? uniqueItems;
+  final int? minProperties;
+  final int? maxProperties;
 
   bool get hasRules =>
       minLength != null ||
@@ -314,7 +356,13 @@ class PropertyValidationRules {
       minimum != null ||
       maximum != null ||
       pattern != null ||
-      constValue != null;
+      constValue != null ||
+      multipleOf != null ||
+      minItems != null ||
+      maxItems != null ||
+      uniqueItems != null ||
+      minProperties != null ||
+      maxProperties != null;
 }
 
 class IrPropertyNamesConstraint {
