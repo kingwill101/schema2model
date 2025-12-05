@@ -573,7 +573,7 @@ class _SchemaEmitter {
     }
     
     // Generate optional helper functions for root class
-    if (options.generateHelpers && ir.rootClass != null) {
+    if (options.generateHelpers) {
       final rootClassName = ir.rootClass.name;
       final funcPrefix = _Naming.fieldName(rootClassName);
       
@@ -935,11 +935,30 @@ class _SchemaEmitter {
     if (value == null) {
       return null;
     }
+    return _valueToLiteral(value);
+  }
+  
+  String? _valueToLiteral(Object? value) {
+    if (value == null) {
+      return 'null';
+    }
     if (value is num || value is bool) {
       return value.toString();
     }
     if (value is String) {
       return _stringLiteral(value);
+    }
+    if (value is List) {
+      final items = value.map((item) => _valueToLiteral(item) ?? 'null').join(', ');
+      return 'const [$items]';
+    }
+    if (value is Map) {
+      final entries = value.entries.map((entry) {
+        final key = _stringLiteral(entry.key.toString());
+        final val = _valueToLiteral(entry.value) ?? 'null';
+        return '$key: $val';
+      }).join(', ');
+      return 'const {$entries}';
     }
     return null;
   }

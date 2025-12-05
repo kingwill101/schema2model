@@ -865,6 +865,11 @@ class _SchemaWalker {
   }
 
   bool _isNullableComposition(Map<String, dynamic> schema) {
+    // Check OpenAPI nullable keyword (OpenAPI 3.0)
+    if (schema['nullable'] == true) {
+      return true;
+    }
+    
     // Check anyOf for null type
     if (schema['anyOf'] is List) {
       final anyOf = schema['anyOf'] as List;
