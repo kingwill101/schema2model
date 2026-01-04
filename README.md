@@ -222,6 +222,13 @@ Build runner currently supports a focused set of options:
 | `header` | String | _none_ | Custom file header |
 | `single_file_output` | bool | `false` | Emit a single `.dart` file vs split parts |
 | `emit_validation_helpers` | bool | `true` | Generate `validate()` methods |
+| `enable_format_hints` | bool | `false` | Map known `format` values to richer Dart types |
+| `enable_format_assertions` | bool | `false` | Enforce `format` validation for registry formats |
+| `enable_content_keywords` | bool | `false` | Enable `contentEncoding`/`contentMediaType` typing |
+| `enable_content_validation` | bool | `false` | Validate decoded content against `contentSchema` |
+| `emit_usage_docs` | bool | `false` | Emit usage docs in generated output |
+| `generate_helpers` | bool | `false` | Emit top-level JSON helper functions |
+| `emit_readme_snippets` | bool | `false` | Emit README snippets in multi-file plans |
 | `allow_network_refs` | bool | `false` | Permit network `$ref` resolution |
 | `network_cache_path` | String | `.dart_tool/schema2model/cache` | Cache directory for fetched refs |
 | `default_dialect` | String | `latest` | Dialect URI or `none` to require explicit `$schema` |
@@ -265,7 +272,9 @@ SchemaGeneratorOptions(
   // Validation & types
   emitValidationHelpers: true,
   enableFormatHints: true,
+  enableFormatAssertions: false,
   enableContentKeywords: false,
+  enableContentValidation: false,
 
   // Security (see REFERENCE_GOVERNANCE.md)
   allowNetworkRefs: false,
@@ -292,7 +301,7 @@ SchemaGeneratorOptions(
 - Const values
 
 ### Validation ✅
-- String: `minLength`, `maxLength`, `pattern`, `format`
+- String: `minLength`, `maxLength`, `pattern`, `format` (assertions opt-in)
 - Number: `minimum`, `maximum`, `multipleOf`
 - Array: `minItems`, `maxItems`, `uniqueItems`, `contains`, `minContains`, `maxContains`
 - Object: `required`, `minProperties`, `maxProperties`, `propertyNames`
@@ -330,8 +339,10 @@ SchemaGeneratorOptions(
 - Configurable default dialect
 
 ### Limitations ⚠️
-- `contentMediaType`, `contentEncoding`, `contentSchema` - Partially supported (base64, base16, base32, quoted-printable)
+- `contentMediaType`, `contentEncoding`, `contentSchema` - Content decoding supported; contentSchema validation limited to JSON media types
 - Format hints require `enableFormatHints: true`
+- Format assertions require `enableFormatAssertions: true`
+- Content validation requires `enableContentValidation: true`
 
 See [LIMITATIONS.md](LIMITATIONS.md) for details and workarounds.
 
@@ -351,6 +362,8 @@ Check out the [`example/`](example/) directory for:
 - **[schema2model_example.dart](example/schema2model_example.dart)** - Standalone API example
 - **[helper_functions_example.dart](example/helper_functions_example.dart)** - Top-level helpers
 - **[sealed_unions_example.dart](example/sealed_unions_example.dart)** - `oneOf`/`anyOf` unions
+- **[format_assertions_example.dart](example/format_assertions_example.dart)** - `format` validation
+- **[content_validation_example.dart](example/content_validation_example.dart)** - `contentSchema` validation
 - **[reserved_keywords_example.dart](example/reserved_keywords_example.dart)** - Reserved words
 - **[Real schemas](example/schemas/)** - GitHub workflows, actions, and more
 

@@ -80,6 +80,7 @@ class IrProperty {
     this.contentMediaType,
     this.contentEncoding,
     this.contentSchema,
+    this.contentSchemaTypeRef,
     this.isReadOnly = false,
     this.isWriteOnly = false,
     Map<String, Object?>? extensionAnnotations,
@@ -107,6 +108,9 @@ class IrProperty {
   
   /// Schema for validating decoded content
   final Map<String, dynamic>? contentSchema;
+
+  /// Resolved type for validating decoded content (when enabled)
+  final TypeRef? contentSchemaTypeRef;
   
   /// Property is read-only (managed by server, should not be sent in requests)
   final bool isReadOnly;
@@ -314,6 +318,28 @@ class ConstraintBranch {
   final Set<String> requiredProperties;
 }
 
+class ApplicatorConstraint {
+  ApplicatorConstraint({
+    required this.keyword,
+    required this.schemaPointer,
+    required List<ApplicatorBranch> branches,
+  }) : branches = List<ApplicatorBranch>.unmodifiable(branches);
+
+  final String keyword;
+  final String schemaPointer;
+  final List<ApplicatorBranch> branches;
+}
+
+class ApplicatorBranch {
+  ApplicatorBranch({
+    required this.schemaPointer,
+    required this.typeRef,
+  });
+
+  final String schemaPointer;
+  final TypeRef typeRef;
+}
+
 class JsonConditionals {
   JsonConditionals({this.ifSchema, this.thenSchema, this.elseSchema});
 
@@ -332,6 +358,8 @@ class PropertyValidationRules {
     this.exclusiveMaximum = false,
     this.pattern,
     this.constValue,
+    this.allowedTypes,
+    this.format,
     this.multipleOf,
     this.minItems,
     this.maxItems,
@@ -348,6 +376,8 @@ class PropertyValidationRules {
   final bool exclusiveMaximum;
   final String? pattern;
   final Object? constValue;
+  final List<String>? allowedTypes;
+  final String? format;
   final num? multipleOf;
   final int? minItems;
   final int? maxItems;
@@ -362,6 +392,8 @@ class PropertyValidationRules {
       maximum != null ||
       pattern != null ||
       constValue != null ||
+      (allowedTypes != null && allowedTypes!.isNotEmpty) ||
+      format != null ||
       multipleOf != null ||
       minItems != null ||
       maxItems != null ||

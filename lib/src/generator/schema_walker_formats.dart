@@ -275,8 +275,18 @@ final Map<String, _FormatInfo> _formatRegistry = <String, _FormatInfo>{
     definition:
         'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-email-addresses',
   ),
+  'idn-email': _FormatInfo(
+    description: 'Internationalized email address as defined by RFC 6531.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-email-addresses',
+  ),
   'hostname': _FormatInfo(
     description: 'Hostname as defined by RFC 1123.',
+    definition:
+        'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-hostnames',
+  ),
+  'idn-hostname': _FormatInfo(
+    description: 'Internationalized hostname as defined by RFC 5890.',
     definition:
         'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-hostnames',
   ),
@@ -337,4 +347,25 @@ final Map<String, _FormatInfo> _formatRegistry = <String, _FormatInfo>{
     definition:
         'https://json-schema.org/draft/2020-12/json-schema-validation.html#name-json-pointer',
   ),
+};
+
+const Set<String> _formatAssertionRegistry = <String>{
+  'date-time',
+  'date',
+  'time',
+  'duration',
+  'email',
+  'idn-email',
+  'hostname',
+  'idn-hostname',
+  'ipv4',
+  'ipv6',
+  'uri',
+  'uri-reference',
+  'iri',
+  'iri-reference',
+  'uri-template',
+  'json-pointer',
+  'relative-json-pointer',
+  'regex',
 };

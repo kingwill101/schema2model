@@ -31,9 +31,28 @@ class _SchemaEmitter {
         if (prop.typeRef is ContentEncodedTypeRef) {
           encodings.add((prop.typeRef as ContentEncodedTypeRef).encoding);
         }
+        if (options.enableContentValidation &&
+            prop.contentEncoding != null &&
+            prop.contentEncoding!.isNotEmpty) {
+          encodings.add(prop.contentEncoding!);
+        }
       }
     }
     return encodings;
+  }
+
+  bool _needsContentValidation(SchemaIr ir) {
+    if (!options.enableContentValidation) {
+      return false;
+    }
+    for (final klass in ir.classes) {
+      for (final prop in klass.properties) {
+        if (prop.contentSchemaTypeRef != null) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   String renderLibrary(SchemaIr ir) {
@@ -42,8 +61,11 @@ class _SchemaEmitter {
     
     // Check if any property uses ContentEncodedTypeRef and add required imports/helpers
     final requiredEncodings = _getRequiredEncodings(ir);
-    if (requiredEncodings.isNotEmpty) {
+    final needsContentValidation = _needsContentValidation(ir);
+    if (requiredEncodings.isNotEmpty || needsContentValidation) {
       buffer.writeln("import 'dart:convert';");
+    }
+    if (requiredEncodings.isNotEmpty) {
       buffer.writeln("import 'dart:typed_data';");
       buffer.writeln();
       
@@ -794,6 +816,14 @@ class _SchemaEmitter {
     if (rules.constValue != null) {
       parts.add('const: ${rules.constValue}');
     }
+
+    if (rules.allowedTypes != null && rules.allowedTypes!.isNotEmpty) {
+      final joined = rules.allowedTypes!.join(', ');
+      parts.add('types: [$joined]');
+    }
+    if (rules.format != null) {
+      parts.add('format: ${rules.format}');
+    }
     
     return parts.join(', ');
   }
@@ -1474,6 +1504,118 @@ class _SchemaEmitter {
       indent,
       suffix,
     );
+
+    _writeContentValidation(
+      buffer,
+      property,
+      valueVar,
+      pointerVar,
+      indent: indent,
+      suffix: suffix,
+    );
+  }
+
+  void _writeContentValidation(
+    StringBuffer buffer,
+    IrProperty property,
+    String valueVar,
+    String pointerVar, {
+    required String indent,
+    required String suffix,
+  }) {
+    if (!options.enableContentValidation) {
+      return;
+    }
+    final contentTypeRef = property.contentSchemaTypeRef;
+    if (contentTypeRef == null) {
+      return;
+    }
+    if (!_isJsonMediaType(property.contentMediaType)) {
+      return;
+    }
+
+    final decodedVar = '_contentDecoded$suffix';
+    final jsonVar = '_contentJson$suffix';
+    final contentVar = '_contentValue$suffix';
+
+    final encoding = property.contentEncoding;
+    if (encoding != null && encoding.isNotEmpty) {
+      if (property.typeRef is ContentEncodedTypeRef) {
+        buffer.writeln(
+          '$indent final $decodedVar = utf8.decode($valueVar);',
+        );
+      } else {
+        final decodeExpr = _contentDecodeExpression(encoding, valueVar);
+        if (decodeExpr == null) {
+          return;
+        }
+        buffer.writeln(
+          '$indent final $decodedVar = utf8.decode($decodeExpr);',
+        );
+      }
+    } else {
+      buffer.writeln('$indent final $decodedVar = $valueVar;');
+    }
+
+    buffer.writeln('$indent dynamic $jsonVar;');
+    buffer.writeln('$indent try {');
+    buffer.writeln('$indent  $jsonVar = jsonDecode($decodedVar);');
+    buffer.writeln('$indent } catch (_) {');
+    final decodeMessage = _stringLiteral(
+      'Expected content to be valid JSON for contentSchema validation.',
+    );
+    buffer.writeln(
+      '$indent  throwValidationError($pointerVar, \'contentSchema\', $decodeMessage);',
+    );
+    buffer.writeln('$indent }');
+
+    buffer.writeln('$indent try {');
+    buffer.writeln(
+      '$indent  final $contentVar = ${contentTypeRef.deserializeInline(jsonVar, required: true)};',
+    );
+    _writeNestedValidation(
+      buffer,
+      contentTypeRef,
+      contentVar,
+      pointerVar,
+      '$indent  ',
+      '${suffix}content',
+    );
+    buffer.writeln('$indent } on ValidationError {');
+    buffer.writeln('$indent  rethrow;');
+    buffer.writeln('$indent } catch (_) {');
+    final schemaMessage = _stringLiteral(
+      'Content does not match schema defined by contentSchema.',
+    );
+    buffer.writeln(
+      '$indent  throwValidationError($pointerVar, \'contentSchema\', $schemaMessage);',
+    );
+    buffer.writeln('$indent }');
+  }
+
+  String? _contentDecodeExpression(String encoding, String valueExpression) {
+    switch (encoding) {
+      case 'base64':
+        return 'base64Decode($valueExpression)';
+      case 'base16':
+        return '_base16Decode($valueExpression)';
+      case 'base32':
+        return '_base32Decode($valueExpression)';
+      case 'quoted-printable':
+        return '_quotedPrintableDecode($valueExpression)';
+      default:
+        return null;
+    }
+  }
+
+  bool _isJsonMediaType(String? mediaType) {
+    if (mediaType == null) {
+      return true;
+    }
+    final base = mediaType.split(';').first.trim().toLowerCase();
+    return base == 'application/json' ||
+        base == 'text/json' ||
+        base.endsWith('+json');
   }
 
   void _writeValidationRulesForType(
@@ -1486,6 +1628,32 @@ class _SchemaEmitter {
     required String suffix,
   }) {
     final baseRef = _unwrapValidated(ref);
+    if (rules.allowedTypes != null && rules.allowedTypes!.isNotEmpty) {
+      final condition = _allowedTypesCondition(baseRef, rules.allowedTypes!, valueVar);
+      final allowedList = rules.allowedTypes!.join(', ');
+      buffer.writeln('$indent if (!($condition)) {');
+      final message = _stringLiteral(
+        'Expected value to match one of the allowed types [$allowedList].',
+      );
+      buffer.writeln(
+        '$indent  throwValidationError($pointerVar, \'type\', $message);',
+      );
+      buffer.writeln('$indent }');
+    }
+    if (rules.format != null) {
+      final condition =
+          _formatValidationCondition(baseRef, rules.format!, valueVar);
+      if (condition != null) {
+        buffer.writeln('$indent if ($condition) {');
+        final message = _stringLiteral(
+          'Value does not match format ${rules.format}.',
+        );
+        buffer.writeln(
+          '$indent  throwValidationError($pointerVar, \'format\', $message);',
+        );
+        buffer.writeln('$indent }');
+      }
+    }
     if (rules.minLength != null && _isStringLike(ref)) {
       buffer.writeln('${indent}if ($valueVar.length < ${rules.minLength}) {');
       final message = _stringLiteral(
@@ -1749,6 +1917,25 @@ class _SchemaEmitter {
     if (!_typeRequiresValidation(ref, options)) {
       return;
     }
+    if (ref is ApplicatorTypeRef) {
+      _writeNestedValidation(
+        buffer,
+        ref.inner,
+        valueExpression,
+        pointerExpression,
+        indent,
+        suffix,
+      );
+      _writeApplicatorValidation(
+        buffer,
+        ref,
+        valueExpression,
+        pointerExpression,
+        indent,
+        suffix,
+      );
+      return;
+    }
     if (ref is ValidatedTypeRef) {
       if (ref.validation.hasRules) {
         _writeValidationRulesForType(
@@ -1962,6 +2149,141 @@ class _SchemaEmitter {
     }
   }
 
+  void _writeApplicatorValidation(
+    StringBuffer buffer,
+    ApplicatorTypeRef ref,
+    String valueExpression,
+    String pointerExpression,
+    String indent,
+    String suffix,
+  ) {
+    if (ref.constraints.isEmpty) {
+      return;
+    }
+    final jsonVar = '_json$suffix';
+    final jsonExpression = ref.inner.serializeInline(
+      valueExpression,
+      required: true,
+    );
+    buffer.writeln('$indent final $jsonVar = $jsonExpression;');
+
+    for (var constraintIndex = 0;
+        constraintIndex < ref.constraints.length;
+        constraintIndex++) {
+      final constraint = ref.constraints[constraintIndex];
+      final matchVars = <String>[];
+      final contextVars = <String>[];
+
+      for (var branchIndex = 0;
+          branchIndex < constraint.branches.length;
+          branchIndex++) {
+        final branch = constraint.branches[branchIndex];
+        final matchVar = '_constraint${suffix}m${constraintIndex}_$branchIndex';
+        final contextVar =
+            '_constraint${suffix}c${constraintIndex}_$branchIndex';
+        final valueVar =
+            '_constraint${suffix}v${constraintIndex}_$branchIndex';
+
+        buffer.writeln('$indent final $contextVar = context == null ? null : ValidationContext();');
+        buffer.writeln('$indent var $matchVar = false;');
+        buffer.writeln('$indent try {');
+        buffer.writeln('$indent  final context = $contextVar;');
+        buffer.writeln(
+          '$indent  final $valueVar = ${branch.typeRef.deserializeInline(jsonVar, required: true)};',
+        );
+        _writeNestedValidation(
+          buffer,
+          branch.typeRef,
+          valueVar,
+          pointerExpression,
+          '$indent  ',
+          '${suffix}c${constraintIndex}b$branchIndex',
+        );
+        buffer.writeln('$indent  $matchVar = true;');
+        buffer.writeln('$indent } on ValidationError {');
+        buffer.writeln('$indent } catch (_) {');
+        buffer.writeln('$indent }');
+        matchVars.add(matchVar);
+        contextVars.add(contextVar);
+      }
+
+      final matchesVar = '_constraint${suffix}matches$constraintIndex';
+      buffer.writeln(
+        '$indent final $matchesVar = <bool>[${matchVars.join(', ')}];',
+      );
+
+      switch (constraint.keyword) {
+        case 'allOf':
+          buffer.writeln('$indent if ($matchesVar.any((value) => !value)) {');
+          buffer.writeln(
+            '$indent  throwValidationError($pointerExpression, \'allOf\', ${_stringLiteral('Expected all subschemas in ${constraint.schemaPointer} to validate.')});',
+          );
+          buffer.writeln('$indent }');
+          for (var branchIndex = 0;
+              branchIndex < matchVars.length;
+              branchIndex++) {
+            buffer.writeln(
+              '$indent if (context != null && ${matchVars[branchIndex]} && ${contextVars[branchIndex]} != null) {',
+            );
+            buffer.writeln(
+              '$indent  context.mergeFrom(${contextVars[branchIndex]}!);',
+            );
+            buffer.writeln('$indent }');
+          }
+          break;
+        case 'anyOf':
+          buffer.writeln('$indent if (!$matchesVar.any((value) => value)) {');
+          buffer.writeln(
+            '$indent  throwValidationError($pointerExpression, \'anyOf\', ${_stringLiteral('Expected at least one subschema in ${constraint.schemaPointer} to validate.')});',
+          );
+          buffer.writeln('$indent }');
+          for (var branchIndex = 0;
+              branchIndex < matchVars.length;
+              branchIndex++) {
+            buffer.writeln(
+              '$indent if (context != null && ${matchVars[branchIndex]} && ${contextVars[branchIndex]} != null) {',
+            );
+            buffer.writeln(
+              '$indent  context.mergeFrom(${contextVars[branchIndex]}!);',
+            );
+            buffer.writeln('$indent }');
+          }
+          break;
+        case 'oneOf':
+          final countVar = '_constraint${suffix}count$constraintIndex';
+          buffer.writeln(
+            '$indent final $countVar = $matchesVar.where((value) => value).length;',
+          );
+          buffer.writeln('$indent if ($countVar != 1) {');
+          buffer.writeln(
+            '$indent  throwValidationError($pointerExpression, \'oneOf\', ${_stringLiteral('Expected exactly one subschema in ${constraint.schemaPointer} to validate.')});',
+          );
+          buffer.writeln('$indent }');
+          for (var branchIndex = 0;
+              branchIndex < matchVars.length;
+              branchIndex++) {
+            buffer.writeln(
+              '$indent if (context != null && ${matchVars[branchIndex]} && ${contextVars[branchIndex]} != null) {',
+            );
+            buffer.writeln(
+              '$indent  context.mergeFrom(${contextVars[branchIndex]}!);',
+            );
+            buffer.writeln('$indent }');
+          }
+          break;
+        case 'not':
+          buffer.writeln('$indent if ($matchesVar.any((value) => value)) {');
+          buffer.writeln(
+            '$indent  throwValidationError($pointerExpression, \'not\', ${_stringLiteral('Expected subschema at ${constraint.schemaPointer} to fail validation.')});',
+          );
+          buffer.writeln('$indent }');
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
   void _writeConditionalConstraintValidation(
     StringBuffer buffer,
     IrClass klass,
@@ -2036,8 +2358,98 @@ class _SchemaEmitter {
     }
   }
 
-  TypeRef _unwrapValidated(TypeRef ref) =>
-      ref is ValidatedTypeRef ? ref.inner : ref;
+  TypeRef _unwrapValidated(TypeRef ref) {
+    if (ref is ValidatedTypeRef) {
+      return _unwrapValidated(ref.inner);
+    }
+    if (ref is ApplicatorTypeRef) {
+      return _unwrapValidated(ref.inner);
+    }
+    return ref;
+  }
+
+  String _allowedTypesCondition(
+    TypeRef ref,
+    List<String> allowedTypes,
+    String valueExpression,
+  ) {
+    final checks = <String>[];
+    for (final type in allowedTypes) {
+      switch (type) {
+        case 'null':
+          checks.add('$valueExpression == null');
+          break;
+        case 'string':
+          checks.add(_stringTypeCheck(ref, valueExpression));
+          break;
+        case 'integer':
+          checks.add('$valueExpression is int');
+          break;
+        case 'number':
+          checks.add('$valueExpression is num');
+          break;
+        case 'boolean':
+          checks.add('$valueExpression is bool');
+          break;
+        case 'array':
+          checks.add('$valueExpression is List');
+          break;
+        case 'object':
+          if (ref is ObjectTypeRef) {
+            checks.add('$valueExpression is ${ref.spec.name}');
+          } else {
+            checks.add('$valueExpression is Map');
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    if (checks.isEmpty) {
+      return 'true';
+    }
+    return checks.join(' || ');
+  }
+
+  String _stringTypeCheck(TypeRef ref, String valueExpression) {
+    if (ref is FormatTypeRef) {
+      return '$valueExpression is ${ref.typeName}';
+    }
+    if (ref is ContentEncodedTypeRef) {
+      return '$valueExpression is Uint8List';
+    }
+    if (ref is EnumTypeRef) {
+      return '$valueExpression is ${ref.spec.name}';
+    }
+    if (ref is MixedEnumTypeRef) {
+      return '$valueExpression is ${ref.spec.name}';
+    }
+    if (ref is PrimitiveTypeRef && ref.typeName != 'dynamic') {
+      return '$valueExpression is ${ref.typeName}';
+    }
+    return '$valueExpression is String';
+  }
+
+  String? _formatValidationCondition(
+    TypeRef ref,
+    String format,
+    String valueExpression,
+  ) {
+    if (ref is DynamicTypeRef) {
+      return '$valueExpression is String && !isValidFormat(${_stringLiteral(format)}, $valueExpression)';
+    }
+    if (ref is PrimitiveTypeRef && ref.typeName == 'String') {
+      return '!isValidFormat(${_stringLiteral(format)}, $valueExpression)';
+    }
+    if (ref is FormatTypeRef ||
+        ref is EnumTypeRef ||
+        ref is MixedEnumTypeRef ||
+        ref is ContentEncodedTypeRef) {
+      final serialized = ref.serializeInline(valueExpression, required: true);
+      return '!isValidFormat(${_stringLiteral(format)}, $serialized)';
+    }
+    return null;
+  }
 
   bool _isStringLike(TypeRef ref) {
     final base = _unwrapValidated(ref);
@@ -2249,6 +2661,11 @@ bool _classNeedsValidation(
       stack.remove(klass);
       return true;
     }
+    if (options.enableContentValidation &&
+        property.contentSchemaTypeRef != null) {
+      stack.remove(klass);
+      return true;
+    }
     if (_typeRequiresValidation(property.typeRef, options, stack)) {
       stack.remove(klass);
       return true;
@@ -2291,6 +2708,12 @@ bool _typeRequiresValidation(
     }
     return _typeRequiresValidation(ref.inner, options, stack);
   }
+  if (ref is ApplicatorTypeRef) {
+    if (ref.constraints.isNotEmpty) {
+      return true;
+    }
+    return _typeRequiresValidation(ref.inner, options, stack);
+  }
   if (ref is FalseTypeRef) {
     return true;
   }
@@ -2326,6 +2749,9 @@ bool _typeRequiresValidation(
 
 String _containsMatchCondition(TypeRef ref, String valueExpression) {
   if (ref is ValidatedTypeRef) {
+    return _containsMatchCondition(ref.inner, valueExpression);
+  }
+  if (ref is ApplicatorTypeRef) {
     return _containsMatchCondition(ref.inner, valueExpression);
   }
   if (ref is PrimitiveTypeRef) {

@@ -19,9 +19,11 @@ class SchemaGeneratorOptions {
     this.networkCachePath,
     this.onWarning,
     this.enableFormatHints = false,
+    this.enableFormatAssertions = false,
     this.emitValidationHelpers = false,
     this.emitReadmeSnippets = false,
     this.enableContentKeywords = false,
+    this.enableContentValidation = false,
     this.generateHelpers = false,
     this.emitUsageDocs = false,
     this.defaultDialect = SchemaDialect.latest,
@@ -44,9 +46,11 @@ class SchemaGeneratorOptions {
   final String? networkCachePath;
   final void Function(String message)? onWarning;
   final bool enableFormatHints;
+  final bool enableFormatAssertions;
   final bool emitValidationHelpers;
   final bool emitReadmeSnippets;
   final bool enableContentKeywords;
+  final bool enableContentValidation;
   final bool generateHelpers;
   final bool emitUsageDocs;
   final SchemaDialect? defaultDialect;
@@ -65,9 +69,11 @@ class SchemaGeneratorOptions {
     String? networkCachePath,
     void Function(String message)? onWarning,
     bool? enableFormatHints,
+    bool? enableFormatAssertions,
     bool? emitValidationHelpers,
     bool? emitReadmeSnippets,
     bool? enableContentKeywords,
+    bool? enableContentValidation,
     bool? generateHelpers,
     bool? emitUsageDocs,
     SchemaDialect? defaultDialect,
@@ -90,10 +96,14 @@ class SchemaGeneratorOptions {
       networkCachePath: networkCachePath ?? this.networkCachePath,
       onWarning: onWarning ?? this.onWarning,
       enableFormatHints: enableFormatHints ?? this.enableFormatHints,
+      enableFormatAssertions:
+          enableFormatAssertions ?? this.enableFormatAssertions,
       emitValidationHelpers:
           emitValidationHelpers ?? this.emitValidationHelpers,
       emitReadmeSnippets: emitReadmeSnippets ?? this.emitReadmeSnippets,
       enableContentKeywords: enableContentKeywords ?? this.enableContentKeywords,
+      enableContentValidation:
+          enableContentValidation ?? this.enableContentValidation,
       generateHelpers: generateHelpers ?? this.generateHelpers,
       emitUsageDocs: emitUsageDocs ?? this.emitUsageDocs,
       defaultDialect: defaultDialect ?? this.defaultDialect,

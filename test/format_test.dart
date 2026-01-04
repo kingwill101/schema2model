@@ -174,4 +174,47 @@ void main() {
       );
     });
   });
+
+  group('format assertions', () {
+    test('emits validation when enabled', () {
+      const schema = <String, dynamic>{
+        'type': 'object',
+        'properties': {
+          'email': {'type': 'string', 'format': 'email'},
+        },
+        'required': ['email'],
+      };
+
+      final generator = SchemaGenerator(
+        options: const SchemaGeneratorOptions(
+          emitValidationHelpers: true,
+          enableFormatAssertions: true,
+        ),
+      );
+
+      final code = generator.generate(schema);
+
+      expect(code, contains("isValidFormat('email'"));
+      expect(code, contains("throwValidationError(_ptr0, 'format'"));
+    });
+
+    test('does not emit validation when disabled', () {
+      const schema = <String, dynamic>{
+        'type': 'object',
+        'properties': {
+          'email': {'type': 'string', 'format': 'email'},
+        },
+      };
+
+      final generator = SchemaGenerator(
+        options: const SchemaGeneratorOptions(
+          emitValidationHelpers: true,
+        ),
+      );
+
+      final code = generator.generate(schema);
+
+      expect(code, isNot(contains("isValidFormat('email'")));
+    });
+  });
 }

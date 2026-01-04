@@ -517,7 +517,13 @@ class SchemaGenerator {
       '- Format hints: ${options.enableFormatHints ? 'enabled' : 'disabled'}',
     );
     buffer.writeln(
+      '- Format assertions: ${options.enableFormatAssertions ? 'enabled' : 'disabled'}',
+    );
+    buffer.writeln(
       '- Validation helpers: ${options.emitValidationHelpers ? 'enabled' : 'disabled'}',
+    );
+    buffer.writeln(
+      '- Content validation: ${options.enableContentValidation ? 'enabled' : 'disabled'}',
     );
     buffer.writeln();
 
@@ -561,10 +567,16 @@ class SchemaGenerator {
       '- `enableFormatHints`: ${options.enableFormatHints ? 'true' : 'false'}',
     );
     buffer.writeln(
+      '- `enableFormatAssertions`: ${options.enableFormatAssertions ? 'true' : 'false'}',
+    );
+    buffer.writeln(
       '- `emitValidationHelpers`: ${options.emitValidationHelpers ? 'true' : 'false'}',
     );
     buffer.writeln(
       '- `emitReadmeSnippets`: ${options.emitReadmeSnippets ? 'true' : 'false'}',
+    );
+    buffer.writeln(
+      '- `enableContentValidation`: ${options.enableContentValidation ? 'true' : 'false'}',
     );
 
     return buffer.toString();

@@ -193,6 +193,12 @@ class ValidatedTypeRef extends TypeRef {
     }
     if (rules.pattern != null) parts.add('pattern=${rules.pattern}');
     if (rules.constValue != null) parts.add('const=${rules.constValue}');
+    if (rules.allowedTypes != null && rules.allowedTypes!.isNotEmpty) {
+      parts.add('types=${rules.allowedTypes!.join('|')}');
+    }
+    if (rules.format != null) {
+      parts.add('format=${rules.format}');
+    }
     if (rules.multipleOf != null) parts.add('multipleOf=${rules.multipleOf}');
     if (rules.minItems != null) parts.add('minItems=${rules.minItems}');
     if (rules.maxItems != null) parts.add('maxItems=${rules.maxItems}');
@@ -205,4 +211,33 @@ class ValidatedTypeRef extends TypeRef {
     }
     return parts.join(',');
   }
+}
+
+class ApplicatorTypeRef extends TypeRef {
+  const ApplicatorTypeRef(this.inner, this.constraints);
+
+  final TypeRef inner;
+  final List<ApplicatorConstraint> constraints;
+
+  @override
+  String dartType({bool nullable = false}) =>
+      inner.dartType(nullable: nullable);
+
+  @override
+  String deserializeInline(String sourceExpression, {required bool required}) =>
+      inner.deserializeInline(sourceExpression, required: required);
+
+  @override
+  String serializeInline(String valueExpression, {required bool required}) =>
+      inner.serializeInline(valueExpression, required: required);
+
+  @override
+  bool get requiresConversionOnSerialize => inner.requiresConversionOnSerialize;
+
+  @override
+  bool get isList => inner.isList;
+
+  @override
+  String get identity =>
+      'applicator:${inner.identity}:${constraints.map((c) => c.keyword).join(',')}';
 }

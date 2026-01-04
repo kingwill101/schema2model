@@ -68,6 +68,61 @@ void main() {
       );
     });
 
+    test('throws when format-assertion vocabulary required but disabled', () {
+      final schema = <String, dynamic>{
+        r'$schema': SchemaDialect.draft2020_12Uri,
+        r'$vocabulary': <String, bool>{
+          'https://json-schema.org/draft/2020-12/vocab/format-assertion': true,
+        },
+        'type': 'string',
+        'format': 'email',
+      };
+      final generator = createGenerator(
+        options: const SchemaGeneratorOptions(
+          sourcePath: 'memory://schema.json',
+          enableFormatAssertions: false,
+        ),
+      );
+
+      expect(
+        () => generator.buildIr(schema),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('format-assertion'),
+          ),
+        ),
+      );
+    });
+
+    test('throws when content vocabulary required but validation disabled', () {
+      final schema = <String, dynamic>{
+        r'$schema': SchemaDialect.draft2020_12Uri,
+        r'$vocabulary': <String, bool>{
+          'https://json-schema.org/draft/2020-12/vocab/content': true,
+        },
+        'type': 'string',
+      };
+      final generator = createGenerator(
+        options: const SchemaGeneratorOptions(
+          sourcePath: 'memory://schema.json',
+          enableContentValidation: false,
+        ),
+      );
+
+      expect(
+        () => generator.buildIr(schema),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('content'),
+          ),
+        ),
+      );
+    });
+
     test('requires explicit dialect when default is disabled', () {
       final schema = <String, dynamic>{
         'type': 'object',

@@ -396,5 +396,68 @@ void main() {
       expect(dataProp.typeRef, isA<PrimitiveTypeRef>());
       expect(dataProp.dartType, 'String?');
     });
+
+    test('contentSchema type is resolved when validation is enabled', () {
+      final schema = {
+        'type': 'object',
+        'properties': {
+          'metadata': {
+            'type': 'string',
+            'contentMediaType': 'application/json',
+            'contentSchema': {
+              'type': 'object',
+              'properties': {
+                'version': {'type': 'string'},
+              },
+            },
+          },
+        },
+      };
+
+      final generator = SchemaGenerator(
+        options: const SchemaGeneratorOptions(
+          rootClassName: 'Data',
+          enableContentValidation: true,
+        ),
+      );
+
+      final ir = generator.buildIr(schema);
+      final metadataProp = ir.rootClass.properties
+          .firstWhere((p) => p.fieldName == 'metadata');
+
+      expect(metadataProp.contentSchemaTypeRef, isNotNull);
+    });
+
+    test('emits contentSchema validation when enabled', () {
+      final schema = {
+        'type': 'object',
+        'properties': {
+          'payload': {
+            'type': 'string',
+            'contentMediaType': 'application/json',
+            'contentSchema': {
+              'type': 'object',
+              'properties': {
+                'name': {'type': 'string'},
+              },
+            },
+          },
+        },
+        'required': ['payload'],
+      };
+
+      final generator = SchemaGenerator(
+        options: const SchemaGeneratorOptions(
+          emitValidationHelpers: true,
+          enableContentValidation: true,
+        ),
+      );
+
+      final code = generator.generate(schema);
+
+      expect(code, contains('jsonDecode'));
+      expect(code, contains('contentSchema'));
+      expect(code, contains("import 'dart:convert';"));
+    });
   });
 }

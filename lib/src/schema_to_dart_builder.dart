@@ -57,6 +57,19 @@ class SchemaToDartBuilder implements Builder {
       options.config['emit_validation_helpers'],
       true,
     );
+    final enableFormatHints =
+        _parseBool(options.config['enable_format_hints'], false);
+    final enableFormatAssertions =
+        _parseBool(options.config['enable_format_assertions'], false);
+    final enableContentKeywords =
+        _parseBool(options.config['enable_content_keywords'], false);
+    final enableContentValidation =
+        _parseBool(options.config['enable_content_validation'], false);
+    final emitUsageDocs = _parseBool(options.config['emit_usage_docs'], false);
+    final generateHelpers =
+        _parseBool(options.config['generate_helpers'], false);
+    final emitReadmeSnippets =
+        _parseBool(options.config['emit_readme_snippets'], false);
 
     return SchemaToDartBuilder(
       SchemaGeneratorOptions(
@@ -70,6 +83,13 @@ class SchemaToDartBuilder implements Builder {
         onWarning: log.warning,
         defaultDialect: defaultDialect,
         emitValidationHelpers: emitValidationHelpers,
+        enableFormatHints: enableFormatHints,
+        enableFormatAssertions: enableFormatAssertions,
+        enableContentKeywords: enableContentKeywords,
+        enableContentValidation: enableContentValidation,
+        emitUsageDocs: emitUsageDocs,
+        generateHelpers: generateHelpers,
+        emitReadmeSnippets: emitReadmeSnippets,
       ),
       includeGlobs: includeGlobs,
     );

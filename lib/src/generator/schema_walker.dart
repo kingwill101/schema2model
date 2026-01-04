@@ -27,6 +27,7 @@ class _SchemaWalker {
        _anchorsByDocument = <Uri, Map<String, _SchemaLocation>>{},
        _dynamicAnchorsByDocument = <Uri, Map<String, _SchemaLocation>>{},
        _idOrigins = <String, _SchemaLocation>{},
+       _formatAssertionRequired = <Uri, bool>{},
        _dynamicScope = <_DynamicScopeEntry>[],
        _indexedDocuments = <Uri>{},
        _indexedLocations = <_SchemaCacheKey>{} {
@@ -56,6 +57,7 @@ class _SchemaWalker {
   final Map<Uri, Map<String, _SchemaLocation>> _anchorsByDocument;
   final Map<Uri, Map<String, _SchemaLocation>> _dynamicAnchorsByDocument;
   final Map<String, _SchemaLocation> _idOrigins;
+  final Map<Uri, bool> _formatAssertionRequired;
   final List<_DynamicScopeEntry> _dynamicScope;
   final Set<Uri> _indexedDocuments;
   final Set<_SchemaCacheKey> _indexedLocations;
@@ -343,6 +345,7 @@ class _SchemaWalker {
         location,
         inheritedDialect,
       );
+      _validateFormatAssertionKeyword(workingSchema, location);
 
       if (workingSchema case {'\$ref': final String refValue}) {
         final resolved = _resolveReference(refValue, location);
@@ -538,6 +541,34 @@ class _SchemaWalker {
       }
 
       final type = workingSchema['type'];
+      if (type is List) {
+        final seen = <String>{};
+        final deduped = <String>[];
+        for (final entry in type) {
+          if (entry is String && entry.isNotEmpty && seen.add(entry)) {
+            deduped.add(entry);
+          }
+        }
+        final nonNullTypes =
+            deduped.where((value) => value != 'null').toList();
+        if (nonNullTypes.length > 1 &&
+            _isPrimitiveTypeUnion(nonNullTypes) &&
+            _isTypeArrayUnionEligible(workingSchema)) {
+          final members = nonNullTypes
+              .map((typeName) => <String, dynamic>{'type': typeName})
+              .toList();
+          final ref = _resolveUnion(
+            workingSchema,
+            location,
+            members,
+            'type',
+            suggestedClassName: suggestedClassName,
+            dialect: activeDialect,
+          );
+          _typeCache[cacheKey] = ref;
+          return ref;
+        }
+      }
       final normalizedType = _normalizeTypeKeyword(type);
 
       // Treat schema with title (but no type) as an object
@@ -845,18 +876,169 @@ class _SchemaWalker {
       suggestedClassName: suggestedClassName,
       dialect: dialect,
     );
-    if (schema is Map<String, dynamic>) {
-      final rules = _extractValidationRules(schema);
-      if (rules != null && rules.hasRules) {
-        return ValidatedTypeRef(typeRef, rules);
+    if (schema is! Map<String, dynamic>) {
+      return typeRef;
+    }
+
+    TypeRef wrapped = typeRef;
+    final rules = _extractValidationRules(schema);
+    if (rules != null && rules.hasRules) {
+      wrapped = ValidatedTypeRef(wrapped, rules);
+    }
+
+    final applicators = _extractApplicatorConstraints(
+      schema,
+      location,
+      dialect ?? _documentDialect(location.uri),
+    );
+    if (applicators.isNotEmpty) {
+      wrapped = ApplicatorTypeRef(wrapped, applicators);
+    }
+
+    return wrapped;
+  }
+
+  TypeRef _resolveSchemaWithApplicators(
+    Object? schema,
+    _SchemaLocation location, {
+    String? suggestedClassName,
+    SchemaDialect? dialect,
+  }) {
+    final typeRef = _resolveSchema(
+      schema,
+      location,
+      suggestedClassName: suggestedClassName,
+      dialect: dialect,
+    );
+    if (schema is! Map<String, dynamic>) {
+      return typeRef;
+    }
+
+    final applicators = _extractApplicatorConstraints(
+      schema,
+      location,
+      dialect ?? _documentDialect(location.uri),
+    );
+    if (applicators.isEmpty) {
+      return typeRef;
+    }
+    return ApplicatorTypeRef(typeRef, applicators);
+  }
+
+  TypeRef _unwrapApplicatorType(TypeRef ref) {
+    if (ref is ApplicatorTypeRef) {
+      return _unwrapApplicatorType(ref.inner);
+    }
+    if (ref is ValidatedTypeRef) {
+      return _unwrapApplicatorType(ref.inner);
+    }
+    return ref;
+  }
+
+  TypeRef _replaceApplicatorInner(TypeRef ref, TypeRef replacement) {
+    if (ref is ApplicatorTypeRef) {
+      return ApplicatorTypeRef(
+        _replaceApplicatorInner(ref.inner, replacement),
+        ref.constraints,
+      );
+    }
+    if (ref is ValidatedTypeRef) {
+      return ValidatedTypeRef(
+        _replaceApplicatorInner(ref.inner, replacement),
+        ref.validation,
+      );
+    }
+    return replacement;
+  }
+
+  List<ApplicatorConstraint> _extractApplicatorConstraints(
+    Map<String, dynamic> schema,
+    _SchemaLocation location,
+    SchemaDialect dialect,
+  ) {
+    final constraints = <ApplicatorConstraint>[];
+
+    void addListConstraint(String keyword) {
+      final raw = schema[keyword];
+      if (raw is! List || raw.isEmpty) {
+        return;
+      }
+      if (keyword == 'anyOf' || keyword == 'oneOf') {
+        final constraintBranches =
+            _extractConstraintOnlyUnion(location, raw.cast<dynamic>(), keyword);
+        if (constraintBranches != null && constraintBranches.isNotEmpty) {
+          return;
+        }
+      }
+      final branches = <ApplicatorBranch>[];
+      for (var index = 0; index < raw.length; index++) {
+        final entry = raw[index];
+        final branchPointer = _pointerChild(
+          _pointerChild(location.pointer, keyword),
+          '$index',
+        );
+        final branchLocation = _SchemaLocation(
+          uri: location.uri,
+          pointer: branchPointer,
+        );
+        final typeRef = _resolveSchemaWithValidation(
+          entry,
+          branchLocation,
+          dialect: dialect,
+        );
+        branches.add(
+          ApplicatorBranch(
+            schemaPointer: branchPointer,
+            typeRef: typeRef,
+          ),
+        );
+      }
+      if (branches.isNotEmpty) {
+        constraints.add(
+          ApplicatorConstraint(
+            keyword: keyword,
+            schemaPointer: _pointerChild(location.pointer, keyword),
+            branches: branches,
+          ),
+        );
       }
     }
-    return typeRef;
+
+    addListConstraint('allOf');
+    addListConstraint('anyOf');
+    addListConstraint('oneOf');
+
+    final notRaw = schema['not'];
+    if (notRaw != null) {
+      final notPointer = _pointerChild(location.pointer, 'not');
+      final branchLocation = _SchemaLocation(uri: location.uri, pointer: notPointer);
+      final typeRef = _resolveSchemaWithValidation(
+        notRaw,
+        branchLocation,
+        dialect: dialect,
+      );
+      constraints.add(
+        ApplicatorConstraint(
+          keyword: 'not',
+          schemaPointer: notPointer,
+          branches: [
+            ApplicatorBranch(schemaPointer: notPointer, typeRef: typeRef),
+          ],
+        ),
+      );
+    }
+
+    return constraints;
   }
 
   bool _isNullableComposition(Map<String, dynamic> schema) {
     // Check OpenAPI nullable keyword (OpenAPI 3.0)
     if (schema['nullable'] == true) {
+      return true;
+    }
+
+    final typeRaw = schema['type'];
+    if (typeRaw is List && typeRaw.contains('null')) {
       return true;
     }
     
@@ -1483,6 +1665,10 @@ class _SchemaWalker {
     SchemaDialect dialect,
     _SchemaLocation location,
   ) {
+    if (schema.containsKey(r'$vocabulary') || location.pointer == '#') {
+      _formatAssertionRequired[location.uri] =
+          _requiresVocabulary(schema, dialect, 'https://json-schema.org/draft/2020-12/vocab/format-assertion');
+    }
     final Object? vocab = schema['\$vocabulary'];
     if (vocab == null) {
       for (final entry in dialect.defaultVocabularies.entries) {
@@ -1490,6 +1676,13 @@ class _SchemaWalker {
           _schemaError(
             'Dialect ${dialect.uri} requires vocabulary ${entry.key}, '
             'which is not supported by this generator.',
+            location,
+          );
+        }
+        if (entry.value && !_isVocabularyEnabled(entry.key)) {
+          _schemaError(
+            'Dialect ${dialect.uri} requires vocabulary ${entry.key}, '
+            'but the corresponding validation option is disabled.',
             location,
           );
         }
@@ -1510,7 +1703,60 @@ class _SchemaWalker {
           location,
         );
       }
+      if (value && !_isVocabularyEnabled(entry.key)) {
+        _schemaError(
+          'Vocabulary ${entry.key} is required but the corresponding '
+          'validation option is disabled.',
+          location,
+        );
+      }
     }
+  }
+
+  bool _requiresVocabulary(
+    Map<String, dynamic> schema,
+    SchemaDialect dialect,
+    String vocabularyUri,
+  ) {
+    final vocab = schema[r'$vocabulary'];
+    if (vocab is Map<String, dynamic>) {
+      final value = vocab[vocabularyUri];
+      if (value is bool) {
+        return value;
+      }
+    }
+    return dialect.defaultVocabularies[vocabularyUri] == true;
+  }
+
+  bool _formatAssertionsRequired(Uri uri) =>
+      _formatAssertionRequired[uri] ?? false;
+
+  void _validateFormatAssertionKeyword(
+    Map<String, dynamic> schema,
+    _SchemaLocation location,
+  ) {
+    if (!_formatAssertionsRequired(location.uri)) {
+      return;
+    }
+    final raw = schema['format'];
+    if (raw is String && !_formatAssertionRegistry.contains(raw)) {
+      _schemaError(
+        'Unknown format "$raw" is not supported for format-assertion.',
+        location,
+      );
+    }
+  }
+
+  bool _isVocabularyEnabled(String vocabularyUri) {
+    if (vocabularyUri ==
+        'https://json-schema.org/draft/2020-12/vocab/format-assertion') {
+      return _options.enableFormatAssertions;
+    }
+    if (vocabularyUri ==
+        'https://json-schema.org/draft/2020-12/vocab/content') {
+      return _options.enableContentValidation;
+    }
+    return true;
   }
 
   SchemaDialect _documentDialect(Uri uri) {
@@ -1699,7 +1945,7 @@ class _SchemaWalker {
         final propertyClass = _Naming.className(key);
         final suggestedName =
             spec.name == _rootClassName ? propertyClass : '${spec.name}$propertyClass';
-        var propertyType = _resolveSchema(
+        var propertyType = _resolveSchemaWithApplicators(
           propertySchema,
           _SchemaLocation(uri: location.uri, pointer: propertyPointer),
           suggestedClassName: suggestedName,
@@ -1708,14 +1954,18 @@ class _SchemaWalker {
 
         // Override type if content encoding is present
         if (_options.enableContentKeywords &&
-            propertyMap?['contentEncoding'] is String &&
-            propertyType is PrimitiveTypeRef &&
-            propertyType.typeName == 'String') {
+            propertyMap?['contentEncoding'] is String) {
           final encoding = propertyMap!['contentEncoding'] as String;
-          // Supported encodings: base64, base16, base32, quoted-printable
-          if (['base64', 'base16', 'base32', 'quoted-printable']
-              .contains(encoding)) {
-            propertyType = ContentEncodedTypeRef(encoding);
+          final baseType = _unwrapApplicatorType(propertyType);
+          if (baseType is PrimitiveTypeRef && baseType.typeName == 'String') {
+            // Supported encodings: base64, base16, base32, quoted-printable
+            if (['base64', 'base16', 'base32', 'quoted-printable']
+                .contains(encoding)) {
+              propertyType = _replaceApplicatorInner(
+                propertyType,
+                ContentEncodedTypeRef(encoding),
+              );
+            }
           }
         }
 
@@ -1739,12 +1989,13 @@ class _SchemaWalker {
         final examples = propertyMap?['examples'] is List
             ? (propertyMap?['examples'] as List).cast<Object?>()
             : const <Object?>[];
+        final baseType = _unwrapApplicatorType(propertyType);
         final description = _composePropertyDescription(
           description: propertyMap?['description'] as String?,
           format: format,
           formatInfo: formatInfo,
           hintAvailable: hint != null,
-          convertedFormat: propertyType is FormatTypeRef,
+          convertedFormat: baseType is FormatTypeRef,
           deprecated: deprecated,
           defaultValue: defaultValue,
           examples: examples,
@@ -1755,16 +2006,29 @@ class _SchemaWalker {
             ? _extractExtensionAnnotations(propertyMap)
             : <String, Object?>{};
 
+        final contentEnabled =
+            _options.enableContentKeywords || _options.enableContentValidation;
         // Extract content keywords if enabled
-        final contentMediaType = _options.enableContentKeywords
+        final contentMediaType = contentEnabled
             ? (propertyMap?['contentMediaType'] as String?)
             : null;
-        final contentEncoding = _options.enableContentKeywords
+        final contentEncoding = contentEnabled
             ? (propertyMap?['contentEncoding'] as String?)
             : null;
-        final contentSchema = (_options.enableContentKeywords &&
-                propertyMap?['contentSchema'] is Map)
+        final contentSchema = (contentEnabled && propertyMap?['contentSchema'] is Map)
             ? (propertyMap?['contentSchema'] as Map<String, dynamic>?)
+            : null;
+        final contentSchemaTypeRef = (_options.enableContentValidation &&
+                contentSchema != null)
+            ? _resolveSchemaWithValidation(
+                contentSchema,
+                _SchemaLocation(
+                  uri: location.uri,
+                  pointer: _pointerChild(propertyPointer, 'contentSchema'),
+                ),
+                suggestedClassName: '${spec.name}${_Naming.className(key)}Content',
+                dialect: dialect,
+              )
             : null;
         
         final readOnly = propertyMap?['readOnly'] == true;
@@ -1786,6 +2050,7 @@ class _SchemaWalker {
           contentMediaType: contentMediaType,
           contentEncoding: contentEncoding,
           contentSchema: contentSchema,
+          contentSchemaTypeRef: contentSchemaTypeRef,
           isReadOnly: readOnly,
           isWriteOnly: writeOnly,
           extensionAnnotations: extensionAnnotations,
@@ -2166,6 +2431,48 @@ class _SchemaWalker {
     return null;
   }
 
+  static bool _isPrimitiveTypeUnion(List<String> types) {
+    return types.every(
+      (type) =>
+          type == 'string' ||
+          type == 'integer' ||
+          type == 'number' ||
+          type == 'boolean',
+    );
+  }
+
+  static bool _isTypeArrayUnionEligible(Map<String, dynamic> schema) {
+    const allowedKeys = <String>{
+      'type',
+      'title',
+      'description',
+      'default',
+      'examples',
+      'deprecated',
+      'readOnly',
+      'writeOnly',
+      'nullable',
+      r'$id',
+      r'$schema',
+      r'$comment',
+      r'$defs',
+      r'$anchor',
+      r'$dynamicAnchor',
+      r'$dynamicRef',
+      r'$vocabulary',
+    };
+    for (final key in schema.keys) {
+      if (allowedKeys.contains(key)) {
+        continue;
+      }
+      if (key.startsWith('x-')) {
+        continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
   static PrimitiveTypeRef _primitiveFromType(String? type) {
     switch (type) {
       case 'string':
@@ -2494,6 +2801,29 @@ class _SchemaWalker {
       }
     }
 
+    List<String>? allowedTypes;
+    final typeRaw = schema['type'];
+    if (typeRaw is List) {
+      final seen = <String>{};
+      final deduped = <String>[];
+      for (final entry in typeRaw) {
+        if (entry is String && entry.isNotEmpty && seen.add(entry)) {
+          deduped.add(entry);
+        }
+      }
+      if (deduped.length > 1) {
+        allowedTypes = deduped;
+      }
+    }
+
+    String? format;
+    if (_options.enableFormatAssertions) {
+      final raw = schema['format'];
+      if (raw is String && _formatAssertionRegistry.contains(raw)) {
+        format = raw;
+      }
+    }
+
     // Array constraints
     final multipleOfRaw = schema['multipleOf'];
     final multipleOf = multipleOfRaw is num ? multipleOfRaw : null;
@@ -2520,6 +2850,8 @@ class _SchemaWalker {
         maximum == null &&
         pattern == null &&
         constValue == null &&
+        (allowedTypes == null || allowedTypes.isEmpty) &&
+        format == null &&
         multipleOf == null &&
         minItems == null &&
         maxItems == null &&
@@ -2538,6 +2870,8 @@ class _SchemaWalker {
       exclusiveMaximum: exclusiveMaximum,
       pattern: pattern,
       constValue: constValue,
+      allowedTypes: allowedTypes,
+      format: format,
       multipleOf: multipleOf,
       minItems: minItems,
       maxItems: maxItems,

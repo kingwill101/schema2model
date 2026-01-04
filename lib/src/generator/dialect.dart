@@ -26,6 +26,7 @@ class SchemaDialect {
       'https://json-schema.org/draft/2020-12/vocab/unevaluated': true,
       'https://json-schema.org/draft/2020-12/vocab/meta-data': false,
       'https://json-schema.org/draft/2020-12/vocab/format-annotation': false,
+      'https://json-schema.org/draft/2020-12/vocab/format-assertion': false,
       'https://json-schema.org/draft/2020-12/vocab/content': false,
     },
     supportedVocabularies: <String>{
@@ -35,6 +36,8 @@ class SchemaDialect {
       'https://json-schema.org/draft/2020-12/vocab/unevaluated',
       'https://json-schema.org/draft/2020-12/vocab/meta-data',
       'https://json-schema.org/draft/2020-12/vocab/format-annotation',
+      'https://json-schema.org/draft/2020-12/vocab/format-assertion',
+      'https://json-schema.org/draft/2020-12/vocab/content',
     },
     aliases: <String>[
       'https://json-schema.org/draft/2020-12/meta/core',

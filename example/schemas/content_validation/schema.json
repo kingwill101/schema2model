@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContentValidationExample",
+  "type": "object",
+  "properties": {
+    "payload": {
+      "type": "string",
+      "contentMediaType": "application/json",
+      "contentEncoding": "base64",
+      "contentSchema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "age": {"type": "integer", "minimum": 0}
+        },
+        "required": ["name"]
+      }
+    }
+  },
+  "required": ["payload"]
+}
